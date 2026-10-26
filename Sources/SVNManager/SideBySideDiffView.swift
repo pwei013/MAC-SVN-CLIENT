@@ -113,14 +113,21 @@ struct SideBySideDiffView: NSViewRepresentable {
 
         private func resizeTables() {
             guard let host, let presentation else { return }
-            for (index, scroll) in host.panes.enumerated() {
+            let origin = host.panes[0].contentView.bounds.origin
+            let wasSyncing = syncing
+            syncing = true
+            defer { syncing = wasSyncing }
+            // Both panes need the same canvas so the shorter file cannot clamp
+            // its horizontal position before the longer file reaches the edge.
+            let columns = max(presentation.localColumns, presentation.remoteColumns)
+            let width = max(host.panes.map { $0.contentSize.width }.max() ?? 0, CGFloat(columns) * 7.4 + 78)
+            for scroll in host.panes {
                 let table = scroll.documentView as! DiffLineTable
-                let columns = index == 0 ? presentation.localColumns : presentation.remoteColumns
-                let width = max(scroll.contentSize.width, CGFloat(columns) * 7.4 + 78)
                 if abs(table.tableColumns[0].width - width) > 0.5 { table.tableColumns[0].width = width }
                 let size = NSSize(width: width, height: max(scroll.contentSize.height, CGFloat(displayedCount) * table.rowHeight))
                 if table.frame.size != size { table.setFrameSize(size) }
                 table.needsDisplay = true
+                scroll.contentView.scroll(to: origin)
                 scroll.reflectScrolledClipView(scroll.contentView)
             }
         }
@@ -130,9 +137,10 @@ struct SideBySideDiffView: NSViewRepresentable {
             let source = host.panes[index].contentView
             let otherScroll = host.panes[1 - index]
             let other = otherScroll.contentView
-            guard abs(source.bounds.origin.y - other.bounds.origin.y) > 0.5 else { return }
+            let origin = source.bounds.origin
+            guard abs(origin.x - other.bounds.origin.x) > 0.5 || abs(origin.y - other.bounds.origin.y) > 0.5 else { return }
             syncing = true
-            other.scroll(to: NSPoint(x: other.bounds.origin.x, y: source.bounds.origin.y))
+            other.scroll(to: origin)
             otherScroll.reflectScrolledClipView(other)
             syncing = false
         }
@@ -211,6 +219,8 @@ final class DiffPaneContainer: NSView {
             pane.hasVerticalScroller = true
             pane.hasHorizontalScroller = true
             pane.autohidesScrollers = false
+            pane.horizontalScrollElasticity = .none
+            pane.verticalScrollElasticity = .none
             pane.backgroundColor = .textBackgroundColor
             pane.borderType = .noBorder
             let table = DiffLineTable()

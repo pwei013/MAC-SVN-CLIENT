@@ -61,7 +61,7 @@ struct FileComparisonContent: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.2)))
             if let notice = presentation.files.notice { note(notice) }
             if let notice = presentation.lines.notice { note(notice) }
-            Text("颜色表示左侧相对右侧的增删改，深色块强调变化字符。保留原始行号，可按 ⌘C 复制选中行，左右滚动同步。")
+            Text("颜色表示左侧相对右侧的增删改，深色块强调变化字符。保留原始行号，可按 ⌘C 复制选中行，两侧横向和纵向滚动同步。")
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
         .onChange(of: findRequest) { _, _ in showsSearch = true; searchFocused = true }
