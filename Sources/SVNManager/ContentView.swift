@@ -420,28 +420,9 @@ struct ContentView: View {
     }
 
     private var commitReview: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("确认提交到 SVN").font(.title2.bold())
-            Text(SVNLocation.display(model.workingInfo?.url ?? "")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            Text("以下 \(model.checkedChanges.count) 项将提交到服务器：").font(.headline)
-            List(model.checkedChanges) { change in
-                HStack {
-                    Text(change.label).foregroundStyle(statusColor(change))
-                    FileTypeIcon(path: change.path, kind: change.nodeKind)
-                    Text(change.path).font(.system(.callout, design: .monospaced))
-                }
-            }.frame(minHeight: 160, maxHeight: 300)
-            Text("提交说明").font(.headline)
-            ScrollView { Text(model.commitMessage).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: 100)
-            Text("只提交勾选项。新建目录的父路径也需勾选；未勾选的子文件会保留在本地。")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("检查云端更新…", action: model.checkIncomingUpdates).disabled(model.busy)
-                Spacer()
-                Button("返回检查") { model.showCommit = false }.keyboardShortcut(.cancelAction)
-                Button("提交到服务器", action: model.commit).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-            }
-        }.padding(24).frame(width: 650)
+        CommitReviewView(repositoryURL: model.workingInfo?.url ?? "", changes: model.checkedChanges,
+                         message: model.commitMessage, isBusy: model.busy, statusColor: statusColor,
+                         checkUpdates: model.checkIncomingUpdates, goBack: { model.showCommit = false }, commit: model.commit)
     }
 
     private func unignoreReview(_ request: UnignoreRequest) -> some View {
