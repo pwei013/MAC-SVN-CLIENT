@@ -51,7 +51,8 @@ struct ContentView: View {
         .task { model.restoreLastProjectIfNeeded() }
         .onAppear {
             model.reopenMainWindow = {
-                if let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain && !["签出进度", "更新与提交进度"].contains($0.title) }) {
+                if let window = NSApp.windows.first(where: { ($0.isVisible || $0.isMiniaturized) && $0.canBecomeMain && !["签出进度", "更新与提交进度"].contains($0.title) }) {
+                    if window.isMiniaturized { window.deminiaturize(nil) }
                     window.makeKeyAndOrderFront(nil)
                 } else { openWindow(id: "main") }
             }
