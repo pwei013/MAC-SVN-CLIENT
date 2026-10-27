@@ -44,6 +44,13 @@ struct ContentView: View {
                 cancel: { model.localActionPlan = nil },
                 confirm: { model.performLocalAction(plan, keepLocal: $0) })
         }
+        .sheet(item: $model.conflictSession) { session in
+            ConflictResolutionView(plan: session.plan, presentation: session.presentation, isBusy: model.busy,
+                requiresReload: model.conflictRequiresReload,
+                close: { model.conflictSession = nil; model.conflictResolution = nil },
+                review: { model.reviewConflict($0, text: $1, ending: $2) }, resolution: model.conflictResolution,
+                reviewError: model.conflictReviewError, clearReview: { model.conflictResolution = nil }, apply: model.applyConflict)
+        }
         .sheet(isPresented: $model.showActivity) { activityView }
         .sheet(item: $model.unignoreRequest) { request in unignoreReview(request) }
         .sheet(item: $model.directoryIgnoreRequest) { request in
@@ -271,6 +278,8 @@ struct ContentView: View {
                         .help("显示 SVN 用户全局过滤及目录属性忽略的文件和文件夹；忽略项不能直接 Add 或提交。")
                     Button("提交历史") { model.openWorkingHistory() }.disabled(model.busy)
                     Button("检查云端更新", action: model.checkIncomingUpdates).disabled(model.busy)
+                    Button("处理冲突…") { model.openConflict() }
+                        .disabled(model.busy || !model.hasConflict(model.changeSelection ?? ""))
                     Spacer()
                     Button("目录忽略属性…") { model.editDirectoryIgnores() }.disabled(model.busy)
                         .help("查看和编辑当前工作目录的忽略规则及继承来源")
@@ -344,6 +353,10 @@ struct ContentView: View {
                     Label("查看差异", systemImage: "doc.text.magnifyingglass")
                 }.disabled(model.busy || !model.canCompareWithCloud(path))
                     .help("比较已版本化的本地文件与云端最新版本（HEAD）")
+                if model.hasConflict(path) {
+                    Button { model.openConflict(path) } label: { Label("处理冲突…", systemImage: "arrow.triangle.merge") }
+                        .disabled(model.busy)
+                }
                 Divider()
             }
             let paths = model.changes.filter { selected.contains($0.path) && $0.item == "unversioned" }.map(\.path)
@@ -400,7 +413,8 @@ struct ContentView: View {
         } primaryAction: { selected in
             guard !model.busy, !model.isFilteringChanges, let path = model.changes.first(where: { selected.contains($0.path) })?.path else { return }
             model.changeSelection = path
-            model.previewDiff()
+            if model.hasConflict(path) { model.openConflict(path) }
+            else { model.previewDiff() }
         }
         .overlay {
             if model.isFilteringChanges {
@@ -437,7 +451,7 @@ struct ContentView: View {
                         Text("其中 \(model.hiddenCheckedCount) 项不在当前筛选结果中，提交前可在检查清单中核对。")
                             .font(.caption2).foregroundStyle(.orange)
                     }
-                    Text("未跟踪项先选中或勾选，再点 Add；冲突需先用 SVN 工具处理。").font(.caption2).foregroundStyle(.secondary)
+                    Text("未跟踪项先点 Add；冲突项可双击或右键“处理冲突”，解决后仍需检查并提交。").font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { model.showCommit = true } label: { Label("检查并提交…", systemImage: "arrow.up.circle.fill") }

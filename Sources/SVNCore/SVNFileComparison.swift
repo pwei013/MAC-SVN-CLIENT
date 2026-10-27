@@ -162,7 +162,7 @@ private func readLocalComparisonFile(_ file: URL, limit: Int) throws -> Data {
     return data
 }
 
-private func comparisonTextDocument(_ data: Data) throws -> SVNTextFileDocument {
+func comparisonTextDocument(_ data: Data) throws -> SVNTextFileDocument {
     let bytes = Array(data)
     let signatures: [[UInt8]] = [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], [0xFF, 0xD8, 0xFF],
         Array("GIF87a".utf8), Array("GIF89a".utf8), [0x50, 0x4B, 3, 4], [0x50, 0x4B, 5, 6], [0x50, 0x4B, 7, 8],

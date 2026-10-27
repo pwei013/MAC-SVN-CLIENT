@@ -291,6 +291,33 @@ public enum SVNXML {
         }
     }
 
+    static func conflictInfo(_ data: Data) throws -> ConflictInfo {
+        let entries = try parse(data, expected: "info").children.filter { $0.name == "entry" }
+        guard entries.count == 1, let entry = entries.first, let wc = entry.child("wc-info"),
+              let repository = entry.child("repository") else {
+            throw SVNError.invalid("无法确认冲突项目的工作副本身份。")
+        }
+        let conflicts = entry.children.filter { $0.name == "conflict" }
+        let texts = conflicts.filter { $0.attributes["type"] == "text" }
+        let text = texts.first
+        let versions = conflicts.flatMap { conflict in
+            conflict.children.filter { $0.name == "version" }.map { version in
+                version.attributes.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }.joined(separator: "\n")
+            }
+        }.sorted()
+        return ConflictInfo(kind: entry.attributes["kind"] ?? "", root: wc.value("wcroot-abspath"),
+            url: entry.value("url"), repository: repository.value("root"), uuid: repository.value("uuid"),
+            revision: entry.attributes["revision"] ?? "", schedule: wc.value("schedule"),
+            copied: !wc.value("copy-from-url").isEmpty || !wc.value("moved-from").isEmpty || !wc.value("moved-to").isEmpty,
+            types: conflicts.map { $0.attributes["type"] ?? "unknown" }.sorted(),
+            tree: entry.child("tree-conflict") != nil, textCount: texts.count,
+            operation: text?.attributes["operation"] ?? conflicts.first?.attributes["operation"] ?? "",
+            mine: text?.value("prev-wc-file") ?? "", base: text?.value("prev-base-file") ?? "",
+            incoming: text?.value("cur-base-file") ?? "",
+            incomingRevision: text?.children.first { $0.name == "version" && $0.attributes["side"] == "source-right" }?.attributes["revision"] ?? "",
+            versions: versions)
+    }
+
     static func localActionStatuses(_ data: Data) throws -> [LocalActionStatus] {
         try parse(data, expected: "status").descendants("entry").map { entry in
             guard let path = entry.attributes["path"], let value = entry.child("wc-status"),

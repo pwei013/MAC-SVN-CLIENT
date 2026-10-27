@@ -35,7 +35,19 @@ enum ChecksMain {
         let workingFilters = WorkingCopyFilterTests()
         let localActions = LocalActionTests()
         let recovery = CommitRecoveryTests()
+        let conflicts = ConflictResolutionTests()
         let checks: [(name: String, run: () async throws -> Void)] = [
+            ("conflict-resolution-mine-backups-preserve", { try await conflicts.testMineResolutionIsReviewedLocalAndPreservesBackupsAndOtherFiles() }),
+            ("conflict-resolution-theirs-pinned-version", { try await conflicts.testTheirsUsesPinnedConflictVersionEvenWhenHeadAdvances() }),
+            ("conflict-resolution-manual-markers-eols", { try await conflicts.testManualMergeRejectsMarkersAndWritesExplicitLineEndings() }),
+            ("conflict-resolution-manual-encoding", { try await conflicts.testManualMergePreservesUTF16BOMAndLegacyEncodingLosslessly() }),
+            ("conflict-resolution-binary-mislabeled-code", { try await conflicts.testBinaryChoicesKeepRawBytesAndMislabeledCodeRemainsComparable() }),
+            ("conflict-resolution-merge-incoming-branch", { try await conflicts.testMergeConflictUsesIncomingBranchSnapshotRatherThanWorkingBranchHead() }),
+            ("conflict-resolution-snapshot-drift", { try await conflicts.testWorkingAuxiliaryAndRepositoryIdentityDriftStopBeforeWriting() }),
+            ("conflict-resolution-property-tree-blocked", { try await conflicts.testPropertyTreeAndCompositeConflictsAreNeverSilentlyResolved() }),
+            ("conflict-resolution-boundaries-cancel", { try await conflicts.testPathBoundariesSymbolicLinksBackupScopeAndCancellationDoNotWrite() }),
+            ("conflict-resolution-failure-no-replay", { try await conflicts.testResolveFailureIsNotReplayedAndLeavesRecoverableBackup() }),
+            ("conflict-resolution-special-names-size-limits", { try await conflicts.testSpecialNamedFilesAndSizeLimitsStayBounded() }),
             ("commit-recovery-outdated-update-no-replay", { try await recovery.testOutOfDateRecommendsUpdateAndDoesNotRetryCommit() }),
             ("commit-recovery-parent-selection-revalidation", { try await recovery.testMissingParentsUsesTypedPathsAndOnlyChangesSelection() }),
             ("commit-recovery-path-unadd-no-guess", { try await recovery.testMissingPathDoesNotGuessTargetsAndCanUnaddConfirmedFile() }),

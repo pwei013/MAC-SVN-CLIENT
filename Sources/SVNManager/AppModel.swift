@@ -52,6 +52,13 @@ struct FileDiffPresentation: Identifiable, Sendable {
     let language: String
 }
 
+struct ConflictSession: Identifiable {
+    var id: UUID { plan.id }
+    let plan: SVNConflictPlan
+    let presentation: FileDiffPresentation?
+    let openedDirectory: URL
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var screen: Screen = .repository
@@ -103,6 +110,11 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
     @Published var showCommit = false
     @Published var localActionPlan: SVNLocalActionPlan?
+    @Published var conflictSession: ConflictSession?
+    @Published var conflictResolution: SVNConflictResolution?
+    @Published var conflictReviewError: String?
+    @Published private(set) var conflictRequiresReload = false
+    private var reviewedConflictID: UUID?
     @Published var commitRecovery: SVNCommitRecoveryPlan?
     @Published private(set) var lastCommitRecovery: SVNCommitRecoveryPlan?
     private var recoveryOperationID: UUID?
@@ -133,17 +145,19 @@ final class AppModel: ObservableObject {
     private let credentialCache: RepositoryCredentialCache
     private let ignoreConfigurationFiles: [URL]?
     private let ignorePropertyBackupDirectory: URL?
+    private let conflictBackupDirectory: URL
     private var loginContinuation: CheckedContinuation<SVNCredentials, Error>?
     private var listingCache = RepositoryListingCache()
 
     init(credentialStorage: any RepositoryCredentialStorage = KeychainRepositoryCredentialStorage(),
          ignoreConfigurationFiles: [URL]? = nil, ignorePropertyBackupDirectory: URL? = nil,
-         projectStateDirectory: URL? = nil, restoresProjectOnLaunch: Bool = true) {
+         projectStateDirectory: URL? = nil, restoresProjectOnLaunch: Bool = true, conflictBackupDirectory: URL? = nil) {
         credentialCache = RepositoryCredentialCache(storage: credentialStorage)
         self.ignoreConfigurationFiles = ignoreConfigurationFiles
         self.ignorePropertyBackupDirectory = ignorePropertyBackupDirectory
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        self.conflictBackupDirectory = conflictBackupDirectory ?? support.appendingPathComponent("SVNManager/ConflictBackups", isDirectory: true)
         projectStateStore = SVNProjectStateStore(directory: projectStateDirectory ?? support.appendingPathComponent("SVNManager/ProjectStates", isDirectory: true))
         self.restoresProjectOnLaunch = restoresProjectOnLaunch
         executablePath = UserDefaults.standard.string(forKey: "svnExecutable") ?? SVNClient.locateExecutable() ?? ""
@@ -1159,6 +1173,69 @@ final class AppModel: ObservableObject {
     private func refreshAfterWrite(_ directory: URL, result: String) async throws {
         do { try await loadWorkingCopy(directory) }
         catch { throw SVNError.invalid("\(result)，但状态刷新失败；请手动刷新核实，不要重复执行。\n\(error.localizedDescription)") }
+    }
+
+    func hasConflict(_ path: String) -> Bool {
+        changes.contains { $0.path == path && ($0.treeConflicted || $0.item == "conflicted" || $0.properties == "conflicted") }
+    }
+
+    func openConflict(_ requestedPath: String? = nil) {
+        guard !busy, let directory = workingDirectory, let path = requestedPath ?? changeSelection, hasConflict(path) else { return }
+        run("正在读取冲突版本", cancellationMessage: "冲突读取已取消，本地文件未修改。") {
+            let plan = try await self.client.prepareConflict(at: directory, path: path)
+            let presentation: FileDiffPresentation?
+            if let files = plan.comparison { presentation = try await self.prepareFilePresentation(files, path: path) }
+            else { presentation = nil }
+            try Task.checkCancellation()
+            self.conflictResolution = nil
+            self.reviewedConflictID = nil
+            self.conflictReviewError = nil
+            self.conflictRequiresReload = false
+            self.conflictSession = ConflictSession(plan: plan, presentation: presentation, openedDirectory: directory)
+            return "冲突版本已就绪 · \(path)"
+        }
+    }
+
+    func reviewConflict(_ choice: SVNConflictChoice, text: String, ending: SVNMergeLineEnding) {
+        guard !busy, let session = conflictSession, !conflictRequiresReload else { return }
+        conflictResolution = nil
+        conflictReviewError = nil
+        run("正在检查冲突处理结果", cancellationMessage: "检查已取消，未修改文件。", onFailure: { error in
+            self.conflictReviewError = error.localizedDescription
+            return true
+        }) {
+            let resolution = try await self.client.prepareConflictResolution(session.plan, choice: choice, mergedText: text, lineEnding: ending)
+            guard self.conflictSession?.id == session.id else { throw CancellationError() }
+            self.conflictResolution = resolution
+            self.reviewedConflictID = resolution.id
+            return "请确认处理范围及方式；尚未修改文件或标记已解决"
+        }
+    }
+
+    func applyConflict(_ resolution: SVNConflictResolution) {
+        guard !busy, !conflictRequiresReload, reviewedConflictID == resolution.id,
+              let session = conflictSession, session.id == resolution.plan.id else { return }
+        guard workingDirectory?.standardizedFileURL == session.openedDirectory.standardizedFileURL else {
+            conflictReviewError = "当前项目已切换，未执行冲突处理。请关闭后回到对应工作副本重新检查。"
+            conflictRequiresReload = true
+            return
+        }
+        conflictResolution = nil
+        conflictReviewError = nil
+        conflictRequiresReload = true
+        run("正在处理文件冲突", canCancel: false, onFailure: { error in
+            self.conflictReviewError = error.localizedDescription
+            return true
+        }) {
+            let outcome = try await self.client.applyConflictResolution(resolution, backupRoot: self.conflictBackupDirectory)
+            do { try await self.loadWorkingCopy(session.openedDirectory) }
+            catch {
+                throw SVNError.invalid("该文件已处理并标记已解决，但列表刷新失败。请关闭窗口后刷新，不要重复处理。备份：\(outcome.backupDirectory.path)\n\(error.localizedDescription)")
+            }
+            self.conflictSession = nil
+            self.lastCommitRecovery = nil
+            return "已标记已解决 · \(resolution.plan.path)；未提交。处理前备份：\(outcome.backupDirectory.path)"
+        }
     }
 
     func revealWorkingCopy() {
