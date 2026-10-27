@@ -54,7 +54,23 @@ struct WorkingCopyFilterBar: View {
         WorkingCopyStatusFilter.allCases.filter { $0 != .ignored || model.showIgnoredFiles }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    searchField
+                    secondaryFilters
+                    Spacer(minLength: 8)
+                    resetFilters
+                }
+                VStack(alignment: .leading, spacing: 9) {
+                    searchField
+                    HStack(spacing: 12) {
+                        secondaryFilters
+                        Spacer(minLength: 8)
+                        resetFilters
+                    }
+                }
+            }
             StatusChipLayout {
                 ForEach(filters) { status in
                     let active = model.changeStatusFilter == status
@@ -71,22 +87,39 @@ struct WorkingCopyFilterBar: View {
                         .help("仅显示\(status.title)项目，保留原有提交勾选")
                 }
             }
-            HStack(spacing: 10) {
-                Picker("类型", selection: $model.changeKindFilter) {
-                    ForEach(WorkingCopyKindFilter.allCases) { kind in Text(kind.title).tag(kind) }
-                }.pickerStyle(.menu).frame(width: 160)
-                if model.isFilteringChanges { ProgressView().controlSize(.small); Text("正在筛选…") }
-                else { Text("显示 \(model.filteredChanges.count) / \(model.changes.count) 项") }
-                Spacer()
-                Button("全选当前结果", action: model.checkAllVisibleChanges)
-                    .disabled(model.isFilteringChanges || model.changeFilterResult.checkablePaths.isSubset(of: model.checkedPaths))
-                    .help("勾选当前结果中的所有可选项，包括未跟踪和缺失项；保留其他勾选")
-                Button("取消当前全选", action: model.uncheckVisibleChanges)
-                    .disabled(model.isFilteringChanges || model.checkedPaths.isDisjoint(with: model.changeFilterResult.visiblePaths))
-                    .help("取消当前结果中的勾选，保留其他筛选下的勾选")
-                if model.hasChangeFilters { Button("清除筛选", action: model.clearChangeFilters) }
-            }.font(.caption).foregroundStyle(.secondary)
-        }.padding(.horizontal, 24).padding(.top, 3).padding(.bottom, 9).disabled(model.busy)
+        }.padding(.horizontal, 24).padding(.vertical, 12)
+            .background(.quaternary.opacity(0.12)).disabled(model.busy)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("搜索文件路径", text: $model.changeSearch).textFieldStyle(.plain)
+                .accessibilityLabel("搜索文件路径")
+        }.font(.callout).padding(.horizontal, 9).padding(.vertical, 5)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.22)))
+            .frame(minWidth: 170, idealWidth: 260, maxWidth: 360).layoutPriority(1)
+    }
+
+    private var secondaryFilters: some View {
+        HStack(spacing: 12) {
+            Picker("文件类型", selection: $model.changeKindFilter) {
+                ForEach(WorkingCopyKindFilter.allCases) { kind in Text(kind.title).tag(kind) }
+            }.labelsHidden().pickerStyle(.menu).frame(width: 116)
+                .help("按文件或文件夹筛选")
+            Toggle("显示已忽略文件", isOn: Binding(get: { model.showIgnoredFiles }, set: model.setShowIgnoredFiles))
+                .toggleStyle(.checkbox).fixedSize()
+                .help("显示 SVN 忽略的文件和文件夹；忽略项不能直接 Add 或提交")
+        }.font(.callout).fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var resetFilters: some View {
+        Button("重置筛选", action: model.clearChangeFilters)
+            .buttonStyle(.plain).font(.callout).fixedSize()
+            .foregroundStyle(model.hasChangeFilters ? Color.indigo : Color.secondary)
+            .disabled(!model.hasChangeFilters)
+            .help("重置路径、状态和类型，保留原有文件勾选")
     }
 }
 

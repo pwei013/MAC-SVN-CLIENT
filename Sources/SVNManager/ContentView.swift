@@ -223,7 +223,6 @@ struct ContentView: View {
 
     private var workingCopyView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            pageHeader("管理本地变更", subtitle: "检查差异，选择要提交的文件，为每次修改留下记录。", symbol: "folder.badge.gearshape")
             if let directory = model.workingDirectory {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -233,46 +232,16 @@ struct ContentView: View {
                     Spacer()
                     Button(action: model.revealWorkingCopy) { Image(systemName: "folder") }.help("在 Finder 中打开")
                     Button("更换…", action: model.chooseWorkingCopy).disabled(model.busy)
-                }.padding(12).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal, 24)
-                HStack(spacing: 10) {
-                    Button(action: model.refresh) { Label("刷新", systemImage: "arrow.clockwise") }
-                    Button(action: model.update) { Label("更新", systemImage: "arrow.down.circle") }
-                    Button("查看差异", action: model.previewDiff).disabled(model.changeSelection == nil)
-                        .help("比较本地修改与签出基线（BASE）")
-                    Button { prepareAdd(model.addablePaths) } label: { Label("Add", systemImage: "plus.circle") }
-                        .disabled(model.addablePaths.isEmpty)
-                        .help("将勾选或选中的未跟踪项添加到 SVN 版本控制")
-                    Menu("更多操作") {
-                        Button("Add 到版本控制…") { prepareAdd(model.addablePaths) }
-                            .disabled(model.addablePaths.isEmpty)
-                        Button("撤销 Add…") { model.prepareLocalAction(.undoAdd, paths: model.localActionPaths(.undoAdd)) }
-                            .disabled(model.localActionPaths(.undoAdd).isEmpty)
-                        Button("删除选中项目…") { model.prepareLocalAction(.delete, paths: model.localActionPaths(.delete)) }
-                            .disabled(model.localActionPaths(.delete).isEmpty)
-                        Button("选择版本化文件或目录删除…", action: model.chooseVersionedDeletion)
-                        Divider()
-                        Button("将勾选的缺失路径标记为删除…") { showDeleteConfirmation = true }
-                            .disabled(!model.checkedChanges.contains { $0.item == "missing" })
-                    }
-                    Spacer()
-                    TextField("筛选路径", text: $model.changeSearch).textFieldStyle(.roundedBorder).frame(width: 160)
-                }.padding(.horizontal, 24).padding(.vertical, 14).disabled(model.busy)
-                HStack {
-                    Toggle("显示已忽略文件", isOn: Binding(get: { model.showIgnoredFiles }, set: model.setShowIgnoredFiles))
-                        .toggleStyle(.checkbox).disabled(model.busy)
-                        .help("显示 SVN 用户全局过滤及目录属性忽略的文件和文件夹；忽略项不能直接 Add 或提交。")
-                    Button("提交历史") { model.openWorkingHistory() }.disabled(model.busy)
-                    Button("检查云端更新", action: model.checkIncomingUpdates).disabled(model.busy)
-                    Button("处理冲突…") { model.openConflict() }
-                        .disabled(model.busy || !model.hasConflict(model.changeSelection ?? ""))
-                    Spacer()
-                    Button("目录忽略属性…") { model.editDirectoryIgnores() }.disabled(model.busy)
-                        .help("查看和编辑当前工作目录的忽略规则及继承来源")
-                }.font(.callout).padding(.horizontal, 24).padding(.bottom, 10)
+                }.padding(12).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 9))
+                    .padding(.horizontal, 24).padding(.top, 16)
+                WorkingCopyToolbar(model: model, add: prepareAdd, deleteMissing: { showDeleteConfirmation = true })
+                    .padding(.top, 12)
+                Divider()
                 WorkingCopyFilterBar(model: model)
                 changeTable
                 commitComposer
             } else {
+                pageHeader("管理本地变更", subtitle: "检查差异，选择要提交的文件，为每次修改留下记录。", symbol: "folder.badge.gearshape")
                 ContentUnavailableView {
                     Label("打开你的工作副本", systemImage: "folder.badge.plus")
                 } description: {
@@ -304,23 +273,35 @@ struct ContentView: View {
 
     private var changeTable: some View {
         Table(model.filteredChanges, selection: $model.changeSelection) {
-            TableColumn("提交") { change in
+            TableColumn("") { change in
                 Toggle("选择 \(change.path)", isOn: Binding(
                     get: { model.checkedPaths.contains(change.path) },
                     set: { if $0 { model.checkedPaths.insert(change.path) } else { model.checkedPaths.remove(change.path) } }
                 )).labelsHidden().toggleStyle(.checkbox)
                     .disabled(model.busy || !change.canCheck)
-            }.width(42)
+            }.width(52)
+            TableColumn("") { change in
+                FileTypeIcon(path: change.path, kind: change.nodeKind)
+            }.width(24)
             TableColumn("状态") { change in
                 Text(change.label).font(.caption.weight(.medium)).padding(.horizontal, 7).padding(.vertical, 3)
-                    .foregroundStyle(statusColor(change)).background(statusColor(change).opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundStyle(statusColor(change)).background(statusColor(change).opacity(0.10), in: Capsule())
             }.width(84)
             TableColumn("文件路径") { change in
-                HStack(spacing: 8) {
-                    FileTypeIcon(path: change.path, kind: change.nodeKind)
-                    Text(change.path).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-                }.help(change.path)
+                Text(change.path).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(change.path)
             }.width(min: 280, ideal: 520)
+        }
+        .overlay(alignment: .topLeading) {
+            WorkingCopySelectionControl(model: model).padding(.leading, 14).padding(.top, 1)
+        }
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 8) {
+                if model.isFilteringChanges { ProgressView().controlSize(.mini) }
+                Text("已选 \(model.checkedPaths.count) 项 · 显示 \(model.filteredChanges.count) / \(model.changes.count) 项")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }.padding(.horizontal, 10).frame(height: 25)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .allowsHitTesting(false)
         }
         .contextMenu(forSelectionType: String.self) { selected in
             if selected.count == 1, let path = selected.first {
@@ -416,34 +397,32 @@ struct ContentView: View {
     }
 
     private var commitComposer: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("提交说明").font(.headline)
+                Text("已选择 \(model.checkedPaths.count) 个项目").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("勾选可提交项", action: model.checkVisibleCommittableChanges)
-                    .disabled(model.isFilteringChanges).help("勾选当前筛选结果中的可提交项目，保留其他勾选")
-                Button("清空勾选") { model.checkedPaths = [] }
             }.font(.caption).disabled(model.busy)
-            TextEditor(text: $model.commitMessage).font(.body).scrollContentBackground(.hidden)
-                .padding(7).frame(height: 68).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            TextEditor(text: $model.commitMessage).font(.callout).scrollContentBackground(.hidden)
+                .padding(5).frame(height: 44).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(.secondary.opacity(0.18)))
                 .overlay(alignment: .topLeading) {
-                    if model.commitMessage.isEmpty { Text("说明本次修改的内容与原因…").foregroundStyle(.tertiary).padding(12).allowsHitTesting(false) }
+                    if model.commitMessage.isEmpty { Text("说明本次修改的内容与原因…").font(.callout).foregroundStyle(.tertiary).padding(10).allowsHitTesting(false) }
                 }.disabled(model.busy)
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(model.workingCopySummary) · 已勾选 \(model.checkedPaths.count) 项").font(.caption)
+                    Label("仅提交勾选文件", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                     if model.hiddenCheckedCount > 0 {
                         Text("其中 \(model.hiddenCheckedCount) 项不在当前筛选结果中，提交前可在检查清单中核对。")
                             .font(.caption2).foregroundStyle(.orange)
                     }
-                    Text("未跟踪项先点 Add；冲突项可双击或右键“处理冲突”，解决后仍需检查并提交。").font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { model.showCommit = true } label: { Label("检查并提交…", systemImage: "arrow.up.circle.fill") }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .buttonStyle(.borderedProminent).controlSize(.regular)
                     .disabled(model.busy || !model.committable || model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        }.padding(20)
+        }.padding(.horizontal, 20).padding(.vertical, 14)
     }
 
     private var commitReview: some View {
@@ -550,8 +529,9 @@ struct ContentView: View {
         if change.treeConflicted || ["conflicted", "obstructed"].contains(change.item) || change.properties == "conflicted" { return .red }
         switch change.item {
         case "added": return .green
-        case "deleted", "missing": return .orange
-        case "unversioned", "ignored": return .secondary
+        case "deleted": return .red
+        case "modified", "missing": return .orange
+        case "ignored": return .secondary
         default: return .indigo
         }
     }
