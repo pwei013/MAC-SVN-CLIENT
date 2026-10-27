@@ -167,12 +167,12 @@ struct LocalActionTests {
         do {
             _ = try await f.client.commitWithProgress(at: f.wc, paths: ["new.txt"], message: "invalid") { _ in }
             throw CheckFailure.failed("Unversioned file must not be committed")
-        } catch let error as SVNError { try expect(error.localizedDescription.contains("new.txt") && error.localizedDescription.contains("未跟踪")) }
+        } catch let error as SVNCommitSelectionFailure { try expect(error.localizedDescription.contains("new.txt") && error.localizedDescription.contains("未跟踪")) }
         try f.write("new child\n", "added/child.txt"); _ = try await f.client.add(at: f.wc, paths: ["added"])
         do {
             _ = try await f.client.commitWithProgress(at: f.wc, paths: ["added/child.txt"], message: "missing parent") { _ in }
             throw CheckFailure.failed("Missing added parent must fail before sending")
-        } catch let error as SVNError { try expect(error.localizedDescription.contains("父目录") && error.localizedDescription.contains("added")) }
+        } catch let error as SVNCommitSelectionFailure { try expect(error.localizedDescription.contains("父目录") && error.localizedDescription.contains("added")) }
         try expect(try f.youngest() == "1")
     }
 
@@ -210,7 +210,7 @@ private func actionMustFail(_ action: () async throws -> Void) async throws {
     catch { }
 }
 
-private struct ActionFixture {
+struct ActionFixture {
     let root: URL
     let binary: String
     var repo: URL { root.appendingPathComponent("repository") }

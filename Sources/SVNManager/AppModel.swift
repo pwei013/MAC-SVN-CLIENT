@@ -103,6 +103,12 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
     @Published var showCommit = false
     @Published var localActionPlan: SVNLocalActionPlan?
+    @Published var commitRecovery: SVNCommitRecoveryPlan?
+    @Published private(set) var lastCommitRecovery: SVNCommitRecoveryPlan?
+    private var recoveryOperationID: UUID?
+    private var queuedRecovery: (plan: SVNCommitRecoveryPlan, action: SVNCommitRecoveryAction, confirmedIdle: Bool)?
+    private var commitReviewPresented = false
+    private var recoveryAfterReview: SVNCommitRecoveryPlan?
     @Published var showActivity = false
     @Published var checkoutProgress: CheckoutProgressModel?
     @Published var operationProgress: OperationProgressModel?
@@ -416,6 +422,7 @@ final class AppModel: ObservableObject {
     }
 
     func run(_ title: String, canCancel: Bool = true, cancellationMessage: String? = nil,
+             onFailure: (@MainActor (Error) async -> Bool)? = nil,
              action: @escaping @MainActor () async throws -> String) {
         guard !busy else { return }
         busy = true
@@ -432,7 +439,8 @@ final class AppModel: ObservableObject {
                 log(cancellationMessage ?? "操作已取消；签出或更新可能已处理部分文件，请刷新检查。")
             } catch {
                 operation = title + "失败"
-                alert = error.localizedDescription
+                let handled = await onFailure?(error) ?? false
+                if !handled { alert = error.localizedDescription }
                 log(title + "失败：" + error.localizedDescription, failed: true)
             }
         }
@@ -854,17 +862,21 @@ final class AppModel: ObservableObject {
         guard !busy, let directory = workingDirectory,
               directory.standardizedFileURL.resolvingSymlinksInPath() == plan.directory else { return }
         localActionPlan = nil
-        let name = plan.action == .undoAdd ? "撤销 Add" : "标记删除"
-        run("正在\(name)", canCancel: false) {
-            do { try await self.client.applyLocalAction(plan, keepLocal: keepLocal) }
-            catch {
-                try? await self.loadWorkingCopy(directory)
-                throw SVNError.invalid("\(name)未完整确认，请检查刷新后的状态，不要直接重复操作。\n\(error.localizedDescription)")
-            }
-            try await self.refreshAfterWrite(directory, result: "\(name)已执行")
-            self.checkedPaths.subtract(plan.items.map(\.path))
-            return plan.action == .undoAdd ? "已撤销 Add，本地文件已保留；现在可以按需忽略" : "已标记待删除，请检查清单并勾选提交后同步到服务器"
+        run(plan.action == .undoAdd ? "正在撤销 Add" : "正在标记删除", canCancel: false) {
+            try await self.completeLocalAction(plan, keepLocal: keepLocal)
         }
+    }
+
+    private func completeLocalAction(_ plan: SVNLocalActionPlan, keepLocal: Bool) async throws -> String {
+        let name = plan.action == .undoAdd ? "撤销 Add" : "标记删除"
+        do { try await client.applyLocalAction(plan, keepLocal: keepLocal) }
+        catch {
+            try? await loadWorkingCopy(plan.directory)
+            throw SVNError.invalid("\(name)未完整确认，请检查刷新后的状态，不要直接重复操作。\n\(error.localizedDescription)")
+        }
+        try await refreshAfterWrite(plan.directory, result: "\(name)已执行")
+        checkedPaths.subtract(plan.items.map(\.path))
+        return plan.action == .undoAdd ? "已撤销 Add，本地文件已保留；现在可以按需忽略" : "已标记待删除，请检查清单并勾选提交后同步到服务器"
     }
 
     func markMissing() {
@@ -884,27 +896,30 @@ final class AppModel: ObservableObject {
 
     func update() {
         guard !busy, let directory = workingDirectory else { return }
+        run("正在更新工作副本") { try await self.updateWorkingDirectory(directory) }
+    }
+
+    private func updateWorkingDirectory(_ directory: URL, recovery: SVNCommitRecoveryPlan? = nil) async throws -> String {
         let progress = OperationProgressModel(kind: .update, directory: directory)
         operationProgress = progress
         progress.startUpdates()
-        run("正在更新工作副本") {
-            do {
-                let connection = try await self.authenticatedWorkingClient(at: directory)
-                do { _ = try await connection.updateWithProgress(at: directory) { progress.receive($0) } }
-                catch is CancellationError { throw CancellationError() }
-                catch {
-                    try? await self.loadWorkingCopy(directory)
-                    throw SVNError.invalid("更新未完整完成，本地可能已有部分更新或冲突。请检查工作副本状态。\n\(error.localizedDescription)")
-                }
-                try await self.refreshAfterWrite(directory, result: "更新命令已完成")
-                let conflicts = self.changes.filter { $0.treeConflicted || $0.item == "conflicted" || $0.properties == "conflicted" }.count
-                let summary = conflicts > 0 ? "更新完成 · \(conflicts) 项冲突需要处理" : "更新完成"
-                progress.finish(summary: summary, warning: conflicts > 0)
-                return summary
-            } catch {
-                progress.finish(error: error)
-                throw error
+        do {
+            let connection = try await authenticatedWorkingClient(at: directory)
+            if let recovery { try await connection.validateCommitRecovery(recovery) }
+            do { _ = try await connection.updateWithProgress(at: directory) { progress.receive($0) } }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                try? await loadWorkingCopy(directory)
+                throw SVNError.invalid("更新未完整完成，本地可能已有部分更新或冲突。请检查工作副本状态。\n\(error.localizedDescription)")
             }
+            try await refreshAfterWrite(directory, result: "更新命令已完成")
+            let conflicts = changes.filter { $0.treeConflicted || $0.item == "conflicted" || $0.properties == "conflicted" }.count
+            let summary = conflicts > 0 ? "更新完成 · \(conflicts) 项冲突需要处理" : "更新完成"
+            progress.finish(summary: summary, warning: conflicts > 0)
+            return summary
+        } catch {
+            progress.finish(error: error)
+            throw error
         }
     }
 
@@ -1006,11 +1021,17 @@ final class AppModel: ObservableObject {
         guard !busy, let directory = workingDirectory, committable else { return }
         let paths = checkedChanges.map(\.path)
         let message = commitMessage
+        lastCommitRecovery = nil
+        commitRecovery = nil
+        recoveryAfterReview = nil
+        recoveryOperationID = nil
         showCommit = false
         let progress = OperationProgressModel(kind: .commit, directory: directory)
         operationProgress = progress
         progress.startUpdates()
-        run("正在提交变更", canCancel: false) {
+        run("正在提交变更", canCancel: false, onFailure: { error in
+            await self.presentCommitRecovery(error, directory: directory, paths: paths, progress: progress)
+        }) {
             do {
                 let connection = try await self.authenticatedWorkingClient(at: directory)
                 let result = try await connection.commitWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) }
@@ -1024,6 +1045,113 @@ final class AppModel: ObservableObject {
             } catch {
                 progress.finish(error: error)
                 throw error
+            }
+        }
+    }
+
+    private func presentCommitRecovery(_ error: Error, directory: URL, paths: [String], progress: OperationProgressModel) async -> Bool {
+        do {
+            let plan = try await client.prepareCommitRecovery(at: directory, attemptedPaths: paths, error: error,
+                confirmedRevision: progress.commandCompleted ? progress.revision : nil)
+            lastCommitRecovery = plan
+            recoveryOperationID = progress.id
+            reopenMainWindow?()
+            if commitReviewPresented { recoveryAfterReview = plan }
+            else { commitRecovery = plan }
+            if progress.commandCompleted { operation = "提交已确认，后续检查需要处理" }
+            return true
+        } catch { return false }
+    }
+
+    var canReopenCommitRecovery: Bool {
+        guard let plan = lastCommitRecovery, let directory = workingDirectory else { return false }
+        return !busy && directory.standardizedFileURL.path == plan.directory.standardizedFileURL.path &&
+            (plan.repositoryURL == nil || plan.repositoryURL == workingInfo?.url)
+    }
+
+    func recoveryAvailable(for operationID: UUID) -> Bool { canReopenCommitRecovery && recoveryOperationID == operationID }
+
+    func reopenCommitRecovery() {
+        guard canReopenCommitRecovery else { return }
+        reopenMainWindow?()
+        showCommit = false
+        if commitReviewPresented { recoveryAfterReview = lastCommitRecovery }
+        else { commitRecovery = lastCommitRecovery }
+    }
+
+    func commitReviewDidAppear() { commitReviewPresented = true }
+    func commitReviewDidDismiss() {
+        commitReviewPresented = false
+        if let pending = recoveryAfterReview {
+            recoveryAfterReview = nil
+            if lastCommitRecovery?.id == pending.id { commitRecovery = pending }
+        }
+    }
+
+    func queueCommitRecovery(_ plan: SVNCommitRecoveryPlan, action: SVNCommitRecoveryAction, confirmedIdle: Bool) {
+        guard !busy, queuedRecovery == nil, commitRecovery?.id == plan.id, plan.id == lastCommitRecovery?.id,
+              plan.actions.contains(action), action != .cleanup || confirmedIdle else { return }
+        queuedRecovery = (plan, action, confirmedIdle)
+        commitRecovery = nil
+    }
+
+    /// Run only after the recommendation sheet has actually closed, so a login,
+    /// history or review sheet never races its dismissal.
+    func executeQueuedCommitRecovery() {
+        guard let queued = queuedRecovery else { return }
+        queuedRecovery = nil
+        let plan = queued.plan, action = queued.action
+        guard !busy, let directory = workingDirectory,
+              directory.standardizedFileURL.path == plan.directory.standardizedFileURL.path,
+              plan.repositoryURL == nil || plan.repositoryURL == workingInfo?.url else {
+            alert = "当前工作副本已切换，未执行推荐操作。请回到对应项目后重新检查。"
+            return
+        }
+        run("正在处理：\(action.title)", canCancel: ![.undoAdd, .cleanup].contains(action)) {
+            if ![.review, .editMessage].contains(action) { try await self.client.validateCommitRecovery(plan) }
+            switch action {
+            case .review, .editMessage:
+                self.screen = .workingCopy
+                return action == .editMessage ? "请按服务器要求修改提交说明，之后单独检查并提交" : "请重新检查清单；文件、勾选和说明已保留"
+            case .update:
+                let summary = try await self.updateWorkingDirectory(directory, recovery: plan)
+                self.lastCommitRecovery = nil
+                return summary + "；请重新检查提交清单，不会自动提交"
+            case .selectParents, .excludeSelection:
+                let paths = try await self.client.recoverySelectionPaths(plan, action: action, currentSelection: self.checkedPaths)
+                if action == .selectParents { self.checkedPaths.formUnion(paths) }
+                else { self.checkedPaths.subtract(paths) }
+                self.lastCommitRecovery = nil
+                self.screen = .workingCopy
+                return "已\(action == .selectParents ? "补充" : "取消") \(paths.count) 项勾选，请检查后单独确认提交"
+            case .undoAdd:
+                guard let undo = plan.undoAddPlan else { throw SVNError.invalid("没有可安全撤销 Add 的项目，请重新检查。") }
+                let result = try await self.completeLocalAction(undo, keepLocal: true)
+                self.lastCommitRecovery = nil
+                return result
+            case .inspectIncoming:
+                return try await self.readIncomingUpdates(at: directory)
+            case .inspectHistory:
+                guard let url = plan.repositoryURL else { throw SVNError.invalid("无法确认仓库地址。") }
+                self.historySession = try await self.readHistorySession(url: url)
+                return "已读取提交历史，请核对上次提交是否已生成版本"
+            case .filterConflicts:
+                try await self.loadWorkingCopy(directory)
+                self.changeStatusFilter = .conflicted
+                self.screen = .workingCopy
+                return "已刷新并筛选冲突项目；未自动解决冲突或提交"
+            case .changeAccount:
+                guard let url = plan.repositoryURL, RepositoryCredentialScope.requiresPassword(url) else { throw SVNError.invalid("该仓库不使用应用内账号密码登录。") }
+                _ = try await self.authenticatedClient(for: url, forceLogin: true)
+                return "仓库账号已验证，未自动重新提交"
+            case .refresh:
+                try await self.loadWorkingCopy(directory)
+                return "已刷新本地状态，请核对勾选和提交说明"
+            case .cleanup:
+                try await self.client.cleanupForCommitRecovery(plan, confirmedNoOtherClients: queued.confirmedIdle)
+                try await self.loadWorkingCopy(directory)
+                self.lastCommitRecovery = nil
+                return "Cleanup 已完成，文件和提交草稿已保留；请重新检查"
             }
         }
     }

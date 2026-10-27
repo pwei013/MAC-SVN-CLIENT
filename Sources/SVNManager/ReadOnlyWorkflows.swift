@@ -27,7 +27,7 @@ extension AppModel {
         }
     }
 
-    private func readHistorySession(url: String) async throws -> HistorySession {
+    func readHistorySession(url: String) async throws -> HistorySession {
         var connection = try await authenticatedClient(for: url, verifyBeforeUse: false)
         var identity: RepositoryIdentity
         let page: SVNHistoryPage
@@ -55,20 +55,25 @@ extension AppModel {
     }
 
     func checkIncomingUpdates() {
-        guard !busy, let directory = workingDirectory, let info = workingInfo else { return }
+        guard !busy, let directory = workingDirectory, workingInfo != nil else { return }
         showCommit = false
         run("正在检查云端更新", cancellationMessage: "云端检查已取消，本地文件未更新。") {
-            var connection = try await self.authenticatedClient(for: info.url, verifyBeforeUse: false)
-            let report: SVNIncomingUpdateReport
-            do { report = try await connection.incomingUpdates(at: directory) }
-            catch let error as SVNError where error.isAuthenticationFailure {
-                connection = try await self.authenticatedClient(for: info.url, forceLogin: true)
-                report = try await connection.incomingUpdates(at: directory)
-            }
-            try Task.checkCancellation()
-            self.incomingSession = IncomingSession(directory: directory, client: connection, report: report)
-            return "云端更新检查完成 · \(report.entries.count) 项，本地文件未更新"
+            try await self.readIncomingUpdates(at: directory)
         }
+    }
+
+    func readIncomingUpdates(at directory: URL) async throws -> String {
+        let info = try await client.info(at: directory)
+        var connection = try await authenticatedClient(for: info.url, verifyBeforeUse: false)
+        let report: SVNIncomingUpdateReport
+        do { report = try await connection.incomingUpdates(at: directory) }
+        catch let error as SVNError where error.isAuthenticationFailure {
+            connection = try await authenticatedClient(for: info.url, forceLogin: true)
+            report = try await connection.incomingUpdates(at: directory)
+        }
+        try Task.checkCancellation()
+        incomingSession = IncomingSession(directory: directory, client: connection, report: report)
+        return "云端更新检查完成 · \(report.entries.count) 项，本地文件未更新"
     }
 
     func reloadFileDiff(choice: String, revisionText: String) {

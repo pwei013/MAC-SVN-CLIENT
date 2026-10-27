@@ -65,14 +65,15 @@ extension SVNClient {
                 let label = current.first { $0.path == path }?.label ?? "没有可提交变更或路径不存在"
                 return safeCommitDiagnostic("\(path)：\(label)", password: credentials.password)
             }
-            throw SVNError.invalid("以下项目不能提交，请刷新并处理对应状态：\n" + reasons.joined(separator: "\n"))
+            throw SVNCommitSelectionFailure(issue: .invalidFiles, paths: invalid, reasons: reasons)
         }
         let selected = Set(targets)
         let missingParents = current.filter { change in
             change.item == "added" && !selected.contains(change.path) && targets.contains { $0.hasPrefix(change.path + "/") }
         }.map(\.path)
         if !missingParents.isEmpty {
-            throw SVNError.invalid("新增文件的以下待新增父目录也需要勾选提交：\n" + missingParents.map { safeCommitDiagnostic($0, password: credentials.password) }.joined(separator: "\n"))
+            throw SVNCommitSelectionFailure(issue: .missingParents, paths: missingParents,
+                reasons: missingParents.map { safeCommitDiagnostic($0, password: credentials.password) })
         }
         let tracker = SVNOperationTracker(kind: .commit, directory: directory, targets: Set(targets),
                                           password: credentials.password, onProgress: onProgress)

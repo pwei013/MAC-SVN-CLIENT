@@ -126,6 +126,7 @@ final class OperationProgressModel: ObservableObject, Identifiable {
 struct OperationProgressView: View {
     @ObservedObject var progress: OperationProgressModel
     let cancel: () -> Void
+    var recover: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var followsLatest = true
 
@@ -188,6 +189,9 @@ struct OperationProgressView: View {
                         "发送通知不等于提交成功；服务器确认版本后显示 100%，提交阶段不提供中断。")
                 }.font(.caption2).foregroundStyle(.secondary)
                 Spacer()
+                if progress.kind == .commit, [.failed, .warning].contains(progress.phase), let recover {
+                    Button("处理建议…", action: recover)
+                }
                 if progress.running && progress.kind == .update { Button(progress.commandCompleted ? "停止信息读取" : "取消更新", role: .cancel, action: cancel) }
                 Button(progress.running ? "隐藏窗口" : "关闭") { dismiss() }.keyboardShortcut(.defaultAction)
             }

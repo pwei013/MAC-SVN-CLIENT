@@ -32,7 +32,13 @@ struct ContentView: View {
         }
         .sheet(item: $model.historySession) { session in HistoryView(session: session, appModel: model) }
         .sheet(item: $model.incomingSession) { session in IncomingUpdatesView(session: session, appModel: model) }
-        .sheet(isPresented: $model.showCommit) { commitReview }
+        .sheet(isPresented: $model.showCommit, onDismiss: model.commitReviewDidDismiss) {
+            commitReview.onAppear(perform: model.commitReviewDidAppear)
+        }
+        .sheet(item: $model.commitRecovery, onDismiss: model.executeQueuedCommitRecovery) { plan in
+            CommitRecoveryView(plan: plan, isBusy: model.busy, close: { model.commitRecovery = nil },
+                execute: { model.queueCommitRecovery(plan, action: $0, confirmedIdle: $1) })
+        }
         .sheet(item: $model.localActionPlan) { plan in
             LocalActionReviewView(plan: plan, isBusy: model.busy,
                 cancel: { model.localActionPlan = nil },
@@ -516,6 +522,9 @@ struct ContentView: View {
                 Label("草稿未保存", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange).help(warning)
             }
             Spacer()
+            if model.canReopenCommitRecovery {
+                Button("提交处理建议…", action: model.reopenCommitRecovery).controlSize(.small)
+            }
             if model.checkoutProgress != nil {
                 Button("签出进度…") { openWindow(id: "checkout-progress") }.controlSize(.small)
             }

@@ -34,7 +34,15 @@ enum ChecksMain {
         let operationProgress = OperationProgressTests()
         let workingFilters = WorkingCopyFilterTests()
         let localActions = LocalActionTests()
+        let recovery = CommitRecoveryTests()
         let checks: [(name: String, run: () async throws -> Void)] = [
+            ("commit-recovery-outdated-update-no-replay", { try await recovery.testOutOfDateRecommendsUpdateAndDoesNotRetryCommit() }),
+            ("commit-recovery-parent-selection-revalidation", { try await recovery.testMissingParentsUsesTypedPathsAndOnlyChangesSelection() }),
+            ("commit-recovery-path-unadd-no-guess", { try await recovery.testMissingPathDoesNotGuessTargetsAndCanUnaddConfirmedFile() }),
+            ("commit-recovery-uncertain-confirmed-readonly", { try await recovery.testUncertainAndConfirmedResultsRecommendReadOnlyChecks() }),
+            ("commit-recovery-cleanup-ack-preserve", { try await recovery.testCleanupRequiresAcknowledgmentAndNeverRemovesFiles() }),
+            ("commit-recovery-drift-fallback-cancel", { try await recovery.testIdentityDriftFallbackAndCancellationPreventRepairs() }),
+            ("commit-recovery-account-scope-diagnostics", { try await recovery.testAccountSuggestionUsesRepositoryScopeAndPreservesDiagnostics() }),
             ("local-action-undo-add-special-preserve", { try await localActions.testUndoAddKeepsSpecialNamedFilesAndUnrelatedChanges() }),
             ("local-action-undo-directory-retain-extra", { try await localActions.testUndoAddedDirectoryIsRecursiveAndKeepsExtraFiles() }),
             ("local-action-undo-reject-history", { try await localActions.testUndoAddRejectsCommittedCopiedAndMovedItems() }),

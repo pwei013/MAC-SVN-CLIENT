@@ -69,9 +69,15 @@ struct SVNManagerApp: App {
         .defaultSize(width: 860, height: 620)
         Window("更新与提交进度", id: "operation-progress") {
             if let progress = model.operationProgress {
-                OperationProgressView(progress: progress, cancel: model.cancel).tint(.indigo)
+                OperationProgressView(progress: progress, cancel: model.cancel,
+                    recover: recoveryAction(for: progress.id)).tint(.indigo)
             }
         }
         .defaultSize(width: 1_060, height: 680)
+    }
+
+    private func recoveryAction(for operationID: UUID) -> (() -> Void)? {
+        guard model.recoveryAvailable(for: operationID) else { return nil }
+        return { model.reopenCommitRecovery() }
     }
 }
