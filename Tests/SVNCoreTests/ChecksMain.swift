@@ -33,7 +33,19 @@ enum ChecksMain {
         let decoration = ComparisonDecorationTests()
         let operationProgress = OperationProgressTests()
         let workingFilters = WorkingCopyFilterTests()
+        let localActions = LocalActionTests()
         let checks: [(name: String, run: () async throws -> Void)] = [
+            ("local-action-undo-add-special-preserve", { try await localActions.testUndoAddKeepsSpecialNamedFilesAndUnrelatedChanges() }),
+            ("local-action-undo-directory-retain-extra", { try await localActions.testUndoAddedDirectoryIsRecursiveAndKeepsExtraFiles() }),
+            ("local-action-undo-reject-history", { try await localActions.testUndoAddRejectsCommittedCopiedAndMovedItems() }),
+            ("local-action-delete-keep-local-commit", { try await localActions.testDeleteKeepsModifiedAndUntrackedFilesUntilAndAfterCommit() }),
+            ("local-action-delete-protect-edits", { try await localActions.testDeleteCanRemoveCleanFilesButNeverForcesLocalChanges() }),
+            ("local-action-drift-boundaries-cancel", { try await localActions.testRevalidationBoundariesAndCancellationPreventWrites() }),
+            ("local-action-failure-no-replay", { try await localActions.testFailedLocalWriteIsNotReplayed() }),
+            ("local-action-commit-error-categories", { try localActions.testCommitFailureCategoriesPreserveSpecificDiagnostics() }),
+            ("local-action-commit-real-rejections", { try await localActions.testRealOutOfDateAndHookRejectionsAreSpecificAndKeepChanges() }),
+            ("local-action-commit-invalid-files-parents", { try await localActions.testInvalidCommitListsFilesAndMissingAddedParentsBeforeSending() }),
+            ("local-action-commit-post-confirmation-warning", { try await localActions.testConfirmedRevisionWithPostCommitWarningIsNotReportedAsRejected() }),
             ("checkout-overlay-overwrite-preserve-progress", { try await checkoutProgress.testOverlayOverwritesSameNamesAndKeepsAllOtherFiles() }),
             ("checkout-overlay-type-symlink-conflicts", { try await checkoutProgress.testOverlayRejectsTypeClashesAndSymlinksBeforeWriting() }),
             ("checkout-overlay-existing-working-copies", { try await checkoutProgress.testOverlayUpdatesMatchingWorkingCopyButRejectsNestedForeignScope() }),

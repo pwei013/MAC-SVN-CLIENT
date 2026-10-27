@@ -102,6 +102,7 @@ final class AppModel: ObservableObject {
     @Published var showDiff = false
     @Published var showSettings = false
     @Published var showCommit = false
+    @Published var localActionPlan: SVNLocalActionPlan?
     @Published var showActivity = false
     @Published var checkoutProgress: CheckoutProgressModel?
     @Published var operationProgress: OperationProgressModel?
@@ -812,6 +813,60 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func localActionPaths(_ action: SVNLocalAction) -> [String] {
+        let selected = checkedPaths.isEmpty ? Set(changeSelection.map { [$0] } ?? []) : checkedPaths
+        return changes.filter {
+            selected.contains($0.path) && !$0.treeConflicted && $0.properties != "conflicted" &&
+                (action == .undoAdd ? $0.item == "added" : ["normal", "none", "modified", "missing"].contains($0.item))
+        }.map(\.path)
+    }
+
+    func prepareLocalAction(_ action: SVNLocalAction, paths: [String]) {
+        guard !busy, !paths.isEmpty, let directory = workingDirectory else { return }
+        run("正在检查操作范围") {
+            self.localActionPlan = try await self.client.prepareLocalAction(action, at: directory, paths: paths)
+            return "操作清单已就绪，请确认影响范围"
+        }
+    }
+
+    func chooseVersionedDeletion() {
+        guard !busy, let directory = workingDirectory else { return }
+        let panel = NSOpenPanel()
+        panel.title = "选择要删除的版本化文件或目录"
+        panel.message = "只能选择当前工作目录内已纳入 SVN 的项目；下一步检查清单，可选择保留本地文件。提交后才删除服务器版本。"
+        panel.directoryURL = directory
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "检查删除清单"
+        guard panel.runModal() == .OK else { return }
+        let base = directory.standardizedFileURL.resolvingSymlinksInPath().path
+        var selected: [String] = []
+        for url in panel.urls {
+            let full = url.standardizedFileURL.path
+            guard full.hasPrefix(base + "/") else { alert = "请选择当前工作目录内的项目，不能删除工作副本根目录。"; return }
+            selected.append(String(full.dropFirst(base.count + 1)))
+        }
+        prepareLocalAction(.delete, paths: selected)
+    }
+
+    func performLocalAction(_ plan: SVNLocalActionPlan, keepLocal: Bool) {
+        guard !busy, let directory = workingDirectory,
+              directory.standardizedFileURL.resolvingSymlinksInPath() == plan.directory else { return }
+        localActionPlan = nil
+        let name = plan.action == .undoAdd ? "撤销 Add" : "标记删除"
+        run("正在\(name)", canCancel: false) {
+            do { try await self.client.applyLocalAction(plan, keepLocal: keepLocal) }
+            catch {
+                try? await self.loadWorkingCopy(directory)
+                throw SVNError.invalid("\(name)未完整确认，请检查刷新后的状态，不要直接重复操作。\n\(error.localizedDescription)")
+            }
+            try await self.refreshAfterWrite(directory, result: "\(name)已执行")
+            self.checkedPaths.subtract(plan.items.map(\.path))
+            return plan.action == .undoAdd ? "已撤销 Add，本地文件已保留；现在可以按需忽略" : "已标记待删除，请检查清单并勾选提交后同步到服务器"
+        }
+    }
+
     func markMissing() {
         guard let directory = workingDirectory else { return }
         let paths = checkedChanges.filter { $0.item == "missing" }.map(\.path)
@@ -958,11 +1013,7 @@ final class AppModel: ObservableObject {
         run("正在提交变更", canCancel: false) {
             do {
                 let connection = try await self.authenticatedWorkingClient(at: directory)
-                let result: SVNOperationResult
-                do { result = try await connection.commitWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) } }
-                catch {
-                    throw SVNError.invalid("提交未确认成功。网络中断时服务器可能已接收提交，请先刷新并核对仓库版本，再决定后续操作。\n\(error.localizedDescription)")
-                }
+                let result = try await connection.commitWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) }
                 self.commitMessage = ""
                 self.checkedPaths = []
                 self.listingCache.invalidateAll()

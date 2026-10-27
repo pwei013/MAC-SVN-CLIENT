@@ -65,6 +65,10 @@ struct CommitReviewView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("只提交勾选项。新建目录的父路径也需勾选；未勾选的子文件会保留在本地。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if changes.contains(where: { $0.item == "deleted" && $0.nodeKind == .directory }) {
+                    Text("提交待删除目录会同时删除其仓库子项；本地文件是否保留取决于删除时的选择。")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     Button("检查云端更新…", action: checkUpdates).disabled(isBusy)
                     Spacer()

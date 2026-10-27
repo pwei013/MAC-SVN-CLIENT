@@ -49,6 +49,7 @@ final class OperationProgressModel: ObservableObject, Identifiable {
     @Published private(set) var revision: String?
     private(set) var commandCompleted = false
     private var commandStarted = false
+    private var commitRejected = false
     private var notice: String?
     private nonisolated let buffer = OperationEventBuffer()
     private var updates: Task<Void, Never>?
@@ -68,7 +69,7 @@ final class OperationProgressModel: ObservableObject, Identifiable {
         case .inspecting: return "\(name)已完成，正在补全信息和刷新状态"
         case .succeeded: return "\(name)完成"
         case .warning: return "\(name)已完成，请检查提示"
-        case .failed: return kind == .commit ? (commandStarted ? "提交结果待核实" : "提交未开始") : "更新未完整完成"
+        case .failed: return kind == .commit ? (commitRejected ? "提交被拒绝" : (commandStarted ? "提交结果待核实" : "提交未开始")) : "更新未完整完成"
         case .cancelled: return "\(name)已取消"
         }
     }
@@ -110,6 +111,7 @@ final class OperationProgressModel: ObservableObject, Identifiable {
     func finish(error: Error? = nil, summary: String? = nil, warning: Bool = false) {
         updates?.cancel(); updates = nil; flush()
         if let error {
+            commitRejected = (error as? SVNCommitFailure)?.definitelyRejected == true
             phase = commandCompleted ? .warning : (error is CancellationError ? .cancelled : .failed)
             detail = commandCompleted ? "SVN 已确认\(name)完成。\n\(error.localizedDescription)" :
                 (error is CancellationError ? (commandStarted ? "操作已取消，本地可能已有部分更新，请刷新检查。" : "操作在执行前已取消。") : error.localizedDescription)

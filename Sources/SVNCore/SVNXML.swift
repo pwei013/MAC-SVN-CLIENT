@@ -278,6 +278,32 @@ public enum SVNXML {
         return result
     }
 
+    static func localActionNodes(_ data: Data) throws -> [LocalActionNode] {
+        try parse(data, expected: "info").descendants("entry").map { entry in
+            guard let path = entry.attributes["path"], let wc = entry.child("wc-info"),
+                  ["file", "dir"].contains(entry.attributes["kind"] ?? "") else {
+                throw SVNError.invalid("无法确认所选项目的版本化元数据。")
+            }
+            return LocalActionNode(path: path, kind: entry.attributes["kind"] == "dir" ? .directory : .file,
+                schedule: wc.value("schedule"), revision: entry.attributes["revision"] ?? "", url: entry.value("url"),
+                root: wc.value("wcroot-abspath"), repository: entry.child("repository")?.value("root") ?? "",
+                copyFrom: wc.value("copy-from-url"), movedFrom: wc.value("moved-from"), movedTo: wc.value("moved-to"))
+        }
+    }
+
+    static func localActionStatuses(_ data: Data) throws -> [LocalActionStatus] {
+        try parse(data, expected: "status").descendants("entry").map { entry in
+            guard let path = entry.attributes["path"], let value = entry.child("wc-status"),
+                  let item = value.attributes["item"], let properties = value.attributes["props"] else {
+                throw SVNError.invalid("无法确认所选项目的本地状态。")
+            }
+            return LocalActionStatus(path: path, item: item, properties: properties,
+                revision: value.attributes["revision"] ?? "",
+                unsafe: ["tree-conflicted", "copied", "switched", "file-external"].contains { value.attributes[$0] == "true" } ||
+                    !value.value("moved-from").isEmpty || !value.value("moved-to").isEmpty)
+        }
+    }
+
     public static func ignoreProperties(_ data: Data) throws -> [SVNIgnorePropertyValue] {
         try parse(data, expected: "properties").descendants("target").flatMap { target in
             try target.children.compactMap { property -> SVNIgnorePropertyValue? in

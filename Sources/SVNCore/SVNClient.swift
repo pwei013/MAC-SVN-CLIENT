@@ -51,6 +51,9 @@ public struct SVNClient: Sendable {
             let authenticationFailed = ["E170001", "E215004", "E215003"].contains { detail.contains($0) }
             let codes = detail.components(separatedBy: .newlines).filter { $0.contains("svn:") }
             var safeDetail = codes.isEmpty ? "请检查路径、网络、认证和服务器证书。" : codes.joined(separator: "\n")
+            if command == "commit", !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                safeDetail = safeCommitDiagnostic(detail.trimmingCharacters(in: .whitespacesAndNewlines), password: credentials.password)
+            }
             if !credentials.password.isEmpty { safeDetail = safeDetail.replacingOccurrences(of: credentials.password, with: "[已隐藏]") }
             if authenticationFailed { throw SVNError.authentication(result.exitCode, String(safeDetail.prefix(4000))) }
             throw SVNError.command(result.exitCode, String(safeDetail.prefix(4000)))
@@ -306,15 +309,7 @@ public struct SVNClient: Sendable {
     }
 
     public func commit(at directory: URL, paths targets: [String], message: String) async throws -> String {
-        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw SVNError.invalid("请填写提交说明。")
-        }
-        let current = try await status(at: directory)
-        guard targets.allSatisfy({ path in current.contains { $0.path == path && $0.canCommit } }) else {
-            throw SVNError.invalid("勾选项状态已变化或无法提交，请刷新后重新检查。")
-        }
-        // Commit every explicit target at depth empty: an unchecked child is never swept in.
-        return try await execute("commit", ["--depth", "empty", "--message", message, "--"] + paths(targets, at: directory), at: directory, authenticated: true).text
+        try await commitWithProgress(at: directory, paths: targets, message: message) { _ in }.text
     }
 
     public func update(at directory: URL) async throws -> String {

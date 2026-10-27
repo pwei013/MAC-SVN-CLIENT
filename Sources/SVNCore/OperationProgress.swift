@@ -59,8 +59,20 @@ extension SVNClient {
         }
         let checked = try paths(targets, at: directory)
         let current = try await status(at: directory)
-        guard targets.allSatisfy({ path in current.contains { $0.path == path && $0.canCommit } }) else {
-            throw SVNError.invalid("勾选项状态已变化或无法提交，请刷新后重新检查。")
+        let invalid = targets.filter { path in !current.contains { $0.path == path && $0.canCommit } }
+        if !invalid.isEmpty {
+            let reasons = invalid.prefix(30).map { path in
+                let label = current.first { $0.path == path }?.label ?? "没有可提交变更或路径不存在"
+                return safeCommitDiagnostic("\(path)：\(label)", password: credentials.password)
+            }
+            throw SVNError.invalid("以下项目不能提交，请刷新并处理对应状态：\n" + reasons.joined(separator: "\n"))
+        }
+        let selected = Set(targets)
+        let missingParents = current.filter { change in
+            change.item == "added" && !selected.contains(change.path) && targets.contains { $0.hasPrefix(change.path + "/") }
+        }.map(\.path)
+        if !missingParents.isEmpty {
+            throw SVNError.invalid("新增文件的以下待新增父目录也需要勾选提交：\n" + missingParents.map { safeCommitDiagnostic($0, password: credentials.password) }.joined(separator: "\n"))
         }
         let tracker = SVNOperationTracker(kind: .commit, directory: directory, targets: Set(targets),
                                           password: credentials.password, onProgress: onProgress)
@@ -68,7 +80,16 @@ extension SVNClient {
         do {
             _ = try await execute("commit", ["--depth", "empty", "--message", message, "--"] + checked,
                 at: directory, authenticated: true, onStdout: { tracker.append($0) }, captureStdout: false)
-        } catch { tracker.finish(); throw error }
+        } catch {
+            tracker.finish()
+            if let revision = tracker.result.revision {
+                onProgress(.commandCompleted(revision: revision))
+                onProgress(.notice("服务器已确认提交版本 r\(revision)，但后续处理有异常；不要重复提交。\n\(error.localizedDescription)"))
+                return tracker.result
+            }
+            if error is CancellationError { throw error }
+            throw SVNCommitFailure.diagnose(error)
+        }
         tracker.finish()
         let result = tracker.result
         guard result.revision != nil else {

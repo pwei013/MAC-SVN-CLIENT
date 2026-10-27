@@ -33,6 +33,11 @@ struct ContentView: View {
         .sheet(item: $model.historySession) { session in HistoryView(session: session, appModel: model) }
         .sheet(item: $model.incomingSession) { session in IncomingUpdatesView(session: session, appModel: model) }
         .sheet(isPresented: $model.showCommit) { commitReview }
+        .sheet(item: $model.localActionPlan) { plan in
+            LocalActionReviewView(plan: plan, isBusy: model.busy,
+                cancel: { model.localActionPlan = nil },
+                confirm: { model.performLocalAction(plan, keepLocal: $0) })
+        }
         .sheet(isPresented: $model.showActivity) { activityView }
         .sheet(item: $model.unignoreRequest) { request in unignoreReview(request) }
         .sheet(item: $model.directoryIgnoreRequest) { request in
@@ -242,6 +247,12 @@ struct ContentView: View {
                     Menu("更多操作") {
                         Button("Add 到版本控制…") { prepareAdd(model.addablePaths) }
                             .disabled(model.addablePaths.isEmpty)
+                        Button("撤销 Add…") { model.prepareLocalAction(.undoAdd, paths: model.localActionPaths(.undoAdd)) }
+                            .disabled(model.localActionPaths(.undoAdd).isEmpty)
+                        Button("删除选中项目…") { model.prepareLocalAction(.delete, paths: model.localActionPaths(.delete)) }
+                            .disabled(model.localActionPaths(.delete).isEmpty)
+                        Button("选择版本化文件或目录删除…", action: model.chooseVersionedDeletion)
+                        Divider()
                         Button("将勾选的缺失路径标记为删除…") { showDeleteConfirmation = true }
                             .disabled(!model.checkedChanges.contains { $0.item == "missing" })
                     }
@@ -332,6 +343,11 @@ struct ContentView: View {
             let paths = model.changes.filter { selected.contains($0.path) && $0.item == "unversioned" }.map(\.path)
             Button { prepareAdd(paths) } label: { Label("Add 到版本控制…", systemImage: "plus") }
                 .disabled(model.busy || paths.isEmpty)
+            let selectedChanges = model.changes.filter { selected.contains($0.path) }
+            Button { model.prepareLocalAction(.undoAdd, paths: Array(selected)) } label: { Label("撤销 Add…", systemImage: "arrow.uturn.backward") }
+                .disabled(model.busy || selectedChanges.isEmpty || selectedChanges.contains { $0.item != "added" || $0.treeConflicted || $0.properties == "conflicted" })
+            Button(role: .destructive) { model.prepareLocalAction(.delete, paths: Array(selected)) } label: { Label("删除…", systemImage: "trash") }
+                .disabled(model.busy || selectedChanges.isEmpty || selectedChanges.contains { !["normal", "none", "modified", "missing"].contains($0.item) || $0.treeConflicted || $0.properties == "conflicted" })
             if paths.count == 1, let path = paths.first {
                 let suggestions = model.ignoreSuggestions(for: path)
                 if !suggestions.isEmpty {
