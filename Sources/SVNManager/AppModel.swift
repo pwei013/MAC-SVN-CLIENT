@@ -621,26 +621,36 @@ final class AppModel: ObservableObject {
         } catch { alert = error.localizedDescription; return }
         guard !remote.isEmpty else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择签出到的空目录"
-        panel.message = "代码将直接签出到所选目录。请新建一个空文件夹，或选择现有空目录。"
+        panel.title = "选择签出目录"
+        panel.message = "代码将直接签出到所选目录。目录非空时会先确认是否覆盖同名文件，其他原有文件会保留。"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "签出到此目录"
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        let progress = CheckoutProgressModel(remote: remote, destination: destination)
-        checkoutProgress = progress
-        progress.startUpdates()
+        checkout(remote: remote, destination: destination)
+    }
+
+    func checkout(remote: String, destination: URL) {
         run("正在签出代码") {
+            let inspection = Task.detached(priority: .userInitiated) { try SVNCheckoutDestination.isNonempty(destination) }
+            let nonempty = try await withTaskCancellationHandler { try await inspection.value } onCancel: { inspection.cancel() }
+            if nonempty, !(try await self.confirmCheckoutOverwrite(at: destination)) {
+                return "已取消签出，目标目录未改动。"
+            }
+            try Task.checkCancellation()
+            let progress = CheckoutProgressModel(remote: remote, destination: destination)
+            self.checkoutProgress = progress
+            progress.startUpdates()
             do {
                 // The progress preparation itself authenticates with reads before checkout.
                 var connection = try await self.authenticatedClient(for: remote, verifyBeforeUse: false)
                 let plan: CheckoutPlan
-                do { plan = try await connection.prepareCheckout(url: remote, destination: destination) }
+                do { plan = try await connection.prepareCheckout(url: remote, destination: destination, overwriteExisting: nonempty) }
                 catch let error as SVNError where error.isAuthenticationFailure {
                     // Reauthenticate only during read-only planning. Never replay checkout.
                     connection = try await self.authenticatedClient(for: remote, forceLogin: true)
-                    plan = try await connection.prepareCheckout(url: remote, destination: destination)
+                    plan = try await connection.prepareCheckout(url: remote, destination: destination, overwriteExisting: nonempty)
                 }
                 try await connection.checkout(plan: plan, destination: destination) { progress.receive($0) }
                 // Never retry checkout after local inspection errors.
@@ -654,6 +664,26 @@ final class AppModel: ObservableObject {
                 throw error
             }
         }
+    }
+
+    private func confirmCheckoutOverwrite(at destination: URL) async throws -> Bool {
+        try Task.checkCancellation()
+        guard let window = NSApp.mainWindow ?? NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else {
+            throw SVNError.invalid("请先打开主窗口，再选择签出目录。")
+        }
+        let confirmation = NSAlert()
+        confirmation.alertStyle = .warning
+        confirmation.messageText = "目标目录不是空目录"
+        confirmation.informativeText = "\(destination.path)\n\n是否继续签出，并用仓库版本覆盖同名文件？其他原有文件和文件夹将保留，不会清空目录。文件与文件夹类型冲突时会停止并提示处理。"
+        confirmation.addButton(withTitle: "覆盖同名文件并签出")
+        confirmation.addButton(withTitle: "取消")
+        let accepted = await withCheckedContinuation { continuation in
+            confirmation.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+        try Task.checkCancellation()
+        return accepted
     }
 
     func chooseWorkingCopy() {

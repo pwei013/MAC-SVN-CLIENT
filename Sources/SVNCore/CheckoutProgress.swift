@@ -10,6 +10,8 @@ public struct CheckoutPlan: Sendable {
     let target: String
     let revision: String
     let paths: Set<String>
+    let directories: Set<String>
+    let overwriteExisting: Bool
 }
 
 /// SVN uses line-buffered stdout on macOS. Decode only complete lines so a read
@@ -54,10 +56,10 @@ final class CheckoutOutputTracker: @unchecked Sendable {
     private func publish(_ lines: [String]) {
         guard !lines.isEmpty else { return }
         for line in lines {
-            // Fresh checkout notifications are "A    path" (four status columns
-            // and a separator). Count known entries only, excluding the WC root.
+            // A = downloaded, E = adopted existing path in a forced checkout.
+            // Count known entries only, excluding the WC root.
             let bytes = Array(line.utf8)
-            guard bytes.count > 5, bytes[0] == 65, bytes[1...4].allSatisfy({ $0 == 32 }) else { continue }
+            guard bytes.count > 5, [65, 69].contains(bytes[0]), bytes[1...4].allSatisfy({ $0 == 32 }) else { continue }
             var path = String(decoding: bytes.dropFirst(5), as: UTF8.self)
             if path.hasSuffix("\r") { path.removeLast() }
             let absolute = URL(fileURLWithPath: path).standardizedFileURL.path

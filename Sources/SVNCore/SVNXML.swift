@@ -36,21 +36,39 @@ private final class XMLTree: NSObject, XMLParserDelegate {
 /// parsing dates or sorting a potentially large repository tree.
 private final class CheckoutListParser: NSObject, XMLParserDelegate {
     var paths = Set<String>()
+    var directories = Set<String>()
+    var invalid = false
     var root: String?
     private var inEntry = false
     private var inName = false
     private var name = ""
+    private var kind = ""
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes attributeDict: [String: String]) {
         if root == nil { root = elementName }
-        if elementName == "entry" { inEntry = true }
+        if Task.isCancelled { parser.abortParsing(); return }
+        if elementName == "entry" {
+            inEntry = true
+            kind = attributeDict["kind"] ?? ""
+            if !["file", "dir"].contains(kind) { invalid = true }
+        }
         if elementName == "name", inEntry { inName = true; name = "" }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         if inName { name += string }
     }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        if elementName == "name", inName { paths.insert(name); inName = false }
+        if elementName == "name", inName {
+            let parts = name.split(separator: "/", omittingEmptySubsequences: false)
+            if name.isEmpty || name.hasPrefix("/") || name.contains("\0") ||
+                parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0 == ".svn" }) {
+                invalid = true
+            }
+            if paths.contains(name) { invalid = true }
+            paths.insert(name)
+            if kind == "dir" { directories.insert(name) }
+            inName = false
+        }
         if elementName == "entry" { inEntry = false }
     }
 }
@@ -217,14 +235,21 @@ public enum SVNXML {
     }
 
     public static func parseCheckoutPaths(_ data: Data) throws -> Set<String> {
+        try checkoutListing(data).paths
+    }
+
+    static func checkoutListing(_ data: Data) throws -> (paths: Set<String>, directories: Set<String>) {
+        try Task.checkCancellation()
         let reader = CheckoutListParser()
         let parser = XMLParser(data: data)
         parser.shouldResolveExternalEntities = false
         parser.delegate = reader
-        guard parser.parse(), reader.root == "lists" else {
+        let parsed = parser.parse()
+        try Task.checkCancellation()
+        guard parsed, reader.root == "lists", !reader.invalid else {
             throw SVNError.invalid("无法读取签出清单，未开始签出。")
         }
-        return reader.paths
+        return (reader.paths, reader.directories)
     }
 
     public static func parseStatus(_ data: Data) throws -> [WorkingCopyChange] {

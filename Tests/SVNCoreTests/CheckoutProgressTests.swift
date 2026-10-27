@@ -3,6 +3,156 @@ import Foundation
 import SVNCore
 
 struct CheckoutProgressTests {
+    func testOverlayOverwritesSameNamesAndKeepsAllOtherFiles() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
+        let destination = fixture.destination
+        try fixture.write("local different\n", to: destination.appendingPathComponent("same.txt"))
+        try fixture.write("local unicode\n", to: destination.appendingPathComponent("目录 空格 @/文件 @.txt"))
+        try fixture.write("remote nested\n", to: destination.appendingPathComponent("shared/base.txt"))
+        let retained = ["keep.local": "root original\n", ".hidden-keep": "hidden original\n", "shared/extra.txt": "nested original\n"]
+        for (path, value) in retained { try fixture.write(value, to: destination.appendingPathComponent(path)) }
+        try FileManager.default.createDirectory(at: destination.appendingPathComponent("empty-original"), withIntermediateDirectories: true)
+        let events = CheckoutCheckBox<[CheckoutEvent]>([])
+        let client = SVNClient(executablePath: tools.svn.path)
+        try await client.checkoutWithProgress(url: remote, destination: destination, overwriteExisting: true) {
+            event in events.modify { $0.append(event) }
+        }
+        try expect(try String(contentsOf: destination.appendingPathComponent("same.txt"), encoding: .utf8) == "remote same\n")
+        try expect(try String(contentsOf: destination.appendingPathComponent("目录 空格 @/文件 @.txt"), encoding: .utf8) == "remote unicode\n")
+        for (path, value) in retained { try expect(try String(contentsOf: destination.appendingPathComponent(path), encoding: .utf8) == value) }
+        try expect(FileManager.default.fileExists(atPath: destination.appendingPathComponent("empty-original").path))
+        let recorded = events.read { $0 }
+        try expect(try checkoutStart(recorded) == (6, "1"))
+        try expect(checkoutOutputs(recorded).last?.completed == 6 && checkoutCompletedCount(recorded) == 1)
+        try expect(checkoutOutputs(recorded).flatMap(\.lines).contains { $0.hasPrefix("E    ") })
+        let status = try await client.status(at: destination)
+        try expect(status.allSatisfy { $0.item == "unversioned" }, "Overwritten files must match the pinned BASE")
+        let second = fixture.root.appendingPathComponent("direct overlay")
+        try fixture.write("keep\n", to: second.appendingPathComponent("other.txt"))
+        _ = try await client.checkout(url: remote, destination: second, overwriteExisting: true)
+        try expect(try String(contentsOf: second.appendingPathComponent("other.txt"), encoding: .utf8) == "keep\n")
+    }
+
+    func testOverlayRejectsTypeClashesAndSymlinksBeforeWriting() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
+        let outside = fixture.root.appendingPathComponent("outside")
+        try fixture.write("outside must stay\n", to: outside.appendingPathComponent("base.txt"))
+        for scenario in 0..<3 {
+            let destination = fixture.destination.appendingPathComponent("case\(scenario)")
+            try fixture.write("keep\n", to: destination.appendingPathComponent("keep.txt"))
+            if scenario == 0 { try fixture.write("file blocks directory\n", to: destination.appendingPathComponent("shared")) }
+            else if scenario == 1 { try fixture.write("directory blocks file\n", to: destination.appendingPathComponent("same.txt/keep.txt")) }
+            else { try FileManager.default.createSymbolicLink(at: destination.appendingPathComponent("shared"), withDestinationURL: outside) }
+            do {
+                try await SVNClient(executablePath: tools.svn.path).checkoutWithProgress(url: remote, destination: destination, overwriteExisting: true) { _ in }
+                throw CheckFailure.failed("An incompatible existing node must not be replaced")
+            } catch let error as CheckFailure { throw error }
+            catch { }
+            try expect(!FileManager.default.fileExists(atPath: destination.appendingPathComponent(".svn").path))
+            try expect(try String(contentsOf: destination.appendingPathComponent("keep.txt"), encoding: .utf8) == "keep\n")
+        }
+        try expect(try String(contentsOf: outside.appendingPathComponent("base.txt"), encoding: .utf8) == "outside must stay\n")
+        try expect(try String(contentsOf: fixture.destination.appendingPathComponent("case0/shared"), encoding: .utf8) == "file blocks directory\n")
+        try expect(try String(contentsOf: fixture.destination.appendingPathComponent("case1/same.txt/keep.txt"), encoding: .utf8) == "directory blocks file\n")
+    }
+
+    func testOverlayDoesNotUpdateExistingOrNestedWorkingCopies() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
+        let client = SVNClient(executablePath: tools.svn.path)
+        _ = try await client.checkout(url: remote, destination: fixture.destination)
+        try fixture.write("local working change\n", to: fixture.destination.appendingPathComponent("same.txt"))
+        do {
+            _ = try await client.checkout(url: remote, destination: fixture.destination, overwriteExisting: true)
+            throw CheckFailure.failed("Existing working copies must not silently become an update")
+        } catch let error as CheckFailure { throw error }
+        catch { }
+        try expect(try String(contentsOf: fixture.destination.appendingPathComponent("same.txt"), encoding: .utf8) == "local working change\n")
+        let outer = fixture.root.appendingPathComponent("outer")
+        _ = try await client.checkout(url: remote, destination: outer.appendingPathComponent("shared"))
+        try fixture.write("nested working change\n", to: outer.appendingPathComponent("shared/same.txt"))
+        do {
+            _ = try await client.checkout(url: remote, destination: outer, overwriteExisting: true)
+            throw CheckFailure.failed("Nested working copies must be retained")
+        } catch let error as CheckFailure { throw error }
+        catch { }
+        try expect(!FileManager.default.fileExists(atPath: outer.appendingPathComponent(".svn").path))
+        try expect(try String(contentsOf: outer.appendingPathComponent("shared/same.txt"), encoding: .utf8) == "nested working change\n")
+    }
+
+    func testOverlayRechecksFilesAndDoesNotReplayFailedWrites() async throws {
+        for failure in [false, true] {
+            let fixture = try CheckoutCheckFixture()
+            defer { fixture.remove() }
+            let script = """
+            for task_argument in "$@"; do task_destination=$task_argument; done
+            \(failure ? "printf 'new file\\n' > \"$task_destination/downloaded.txt\"; exit 1" : "printf 'concurrent local edit, keep this\\n' > \"$task_destination/file.txt\"")
+            printf 'E    %s/file.txt\\n' "$task_destination"
+            """
+            let executable = try fixture.makeMock(checkout: script, entries: [("file.txt", "file")])
+            let original = fixture.destination.appendingPathComponent("file.txt")
+            try fixture.write("before\n", to: original)
+            try fixture.write("extra preserved\n", to: fixture.destination.appendingPathComponent("extra.txt"))
+            let events = CheckoutCheckBox<[CheckoutEvent]>([])
+            do {
+                try await SVNClient(executablePath: executable.path).checkoutWithProgress(url: fixture.remoteURL, destination: fixture.destination, overwriteExisting: true) {
+                    event in events.modify { $0.append(event) }
+                }
+                throw CheckFailure.failed("Failed checkout or concurrent edits must not be overwritten/replayed")
+            } catch let error as CheckFailure { throw error }
+            catch { }
+            try expect(try fixture.calls() == ["info", "list", "checkout"])
+            try expect(checkoutCompletedCount(events.read { $0 }) == 0)
+            try expect(try String(contentsOf: original, encoding: .utf8) == (failure ? "before\n" : "concurrent local edit, keep this\n"))
+            try expect(try String(contentsOf: fixture.destination.appendingPathComponent("extra.txt"), encoding: .utf8) == "extra preserved\n")
+        }
+    }
+
+    func testOverlayCancellationBeforeCheckoutLeavesDirectoryUntouched() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let executable = try fixture.makeMock(checkout: "exit 99", entries: [("file.txt", "file")])
+        let original = fixture.destination.appendingPathComponent("file.txt")
+        try fixture.write("keep\n", to: original)
+        let worker = Task {
+            try await SVNClient(executablePath: executable.path).checkoutWithProgress(url: fixture.remoteURL, destination: fixture.destination, overwriteExisting: true) {
+                if case .started = $0 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { try await worker.value; throw CheckFailure.failed("Cancelled overlay must stop") }
+        catch is CancellationError { }
+        try expect(try fixture.calls() == ["info", "list"])
+        try expect(try String(contentsOf: original, encoding: .utf8) == "keep\n")
+        try expect(!FileManager.default.fileExists(atPath: fixture.destination.appendingPathComponent(".svn").path))
+    }
+
+    func testOverlayBatchesExplicitFilesWithoutTouchingExtras() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository(bulk: 150)
+        for index in 0..<150 { try fixture.write("local \(index)\n", to: fixture.destination.appendingPathComponent("bulk/文件-\(index).txt")) }
+        try fixture.write("not in repository\n", to: fixture.destination.appendingPathComponent("bulk/extra.txt"))
+        try await SVNClient(executablePath: tools.svn.path).checkoutWithProgress(url: remote, destination: fixture.destination, overwriteExisting: true) { _ in }
+        for index in 0..<150 {
+            try expect(try String(contentsOf: fixture.destination.appendingPathComponent("bulk/文件-\(index).txt"), encoding: .utf8) == "remote \(index)\n")
+        }
+        try expect(try String(contentsOf: fixture.destination.appendingPathComponent("bulk/extra.txt"), encoding: .utf8) == "not in repository\n")
+    }
+
+    func testCheckoutManifestRejectsUnsafeAndDuplicatePaths() throws {
+        for name in ["../escape", "/absolute", ".svn/entries", "", "a//b", "a/./b"] {
+            let xml = "<lists><list><entry kind=\"file\"><name>\(name)</name></entry></list></lists>"
+            try expectThrows(SVNError.self) { _ = try SVNXML.parseCheckoutPaths(Data(xml.utf8)) }
+        }
+        let duplicate = "<lists><list><entry kind=\"file\"><name>a</name></entry><entry kind=\"dir\"><name>a</name></entry></list></lists>"
+        try expectThrows(SVNError.self) { _ = try SVNXML.parseCheckoutPaths(Data(duplicate.utf8)) }
+    }
+
     func testStdoutCallbackRunsBeforeExitAndRetainsOrderedBytes() async throws {
         let fixture = try CheckoutCheckFixture()
         defer { fixture.remove() }
@@ -345,6 +495,20 @@ private struct CheckoutCheckFixture: Sendable {
             }
         }
         throw CheckFailure.failed("Checkout integration requires local svn and svnadmin")
+    }
+
+    func overlayRepository(bulk: Int = 0) throws -> String {
+        let tools = try localTools(), repository = root.appendingPathComponent("overlay-repository")
+        let seed = root.appendingPathComponent("seed")
+        try run(tools.svnadmin, ["create", repository.path])
+        try write("remote same\n", to: seed.appendingPathComponent("same.txt"))
+        try write("remote new\n", to: seed.appendingPathComponent("new.txt"))
+        try write("remote unicode\n", to: seed.appendingPathComponent("目录 空格 @/文件 @.txt"))
+        try write("remote nested\n", to: seed.appendingPathComponent("shared/base.txt"))
+        for index in 0..<bulk { try write("remote \(index)\n", to: seed.appendingPathComponent("bulk/文件-\(index).txt")) }
+        let remote = repository.appendingPathComponent("trunk").absoluteString
+        try run(tools.svn, ["import", "-m", "local overlay fixture", "--", seed.path, remote])
+        return remote
     }
 
     @discardableResult

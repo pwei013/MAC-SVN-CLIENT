@@ -96,38 +96,40 @@ public struct SVNClient: Sendable {
         return try SVNXML.parseRepositoryInfo(await execute("info", ["--xml", "--", peg(location.absoluteString)], authenticated: true).stdout)
     }
 
-    public func checkout(url: String, destination: URL) async throws -> String {
+    public func checkout(url: String, destination: URL, overwriteExisting: Bool = false) async throws -> String {
+        if overwriteExisting {
+            try await checkoutWithProgress(url: url, destination: destination, overwriteExisting: true) { _ in }
+            return "签出完成，目标目录中的其他原有文件已保留。"
+        }
         let location = try SVNLocation.validated(url)
         try validateCheckoutDestination(destination)
         return try await execute("checkout", ["--ignore-externals", "--", peg(location.absoluteString), destination.path], authenticated: true).text
     }
 
-    private func validateCheckoutDestination(_ destination: URL) throws {
-        let fm = FileManager.default
-        var isDirectory: ObjCBool = false
-        if fm.fileExists(atPath: destination.path, isDirectory: &isDirectory) {
-            guard isDirectory.boolValue, try fm.contentsOfDirectory(atPath: destination.path).isEmpty else {
-                throw SVNError.invalid("签出目标必须是新目录或空目录，以免混入已有文件。")
-            }
+    private func validateCheckoutDestination(_ destination: URL, overwriteExisting: Bool = false) throws {
+        if try SVNCheckoutDestination.isNonempty(destination), !overwriteExisting {
+            throw SVNError.invalid("目标目录不是空目录，请重新选择并确认覆盖同名文件后签出。")
         }
     }
 
     /// Count and download one immutable revision so remote commits cannot change the denominator.
-    public func checkoutWithProgress(url: String, destination: URL,
+    public func checkoutWithProgress(url: String, destination: URL, overwriteExisting: Bool = false,
                                      onProgress: @escaping @Sendable (CheckoutEvent) -> Void) async throws {
-        let plan = try await prepareCheckout(url: url, destination: destination)
+        let plan = try await prepareCheckout(url: url, destination: destination, overwriteExisting: overwriteExisting)
         try await checkout(plan: plan, destination: destination, onProgress: onProgress)
     }
 
-    public func prepareCheckout(url: String, destination: URL) async throws -> CheckoutPlan {
+    public func prepareCheckout(url: String, destination: URL, overwriteExisting: Bool = false) async throws -> CheckoutPlan {
         let location = try SVNLocation.validated(url)
-        try validateCheckoutDestination(destination)
+        try validateCheckoutDestination(destination, overwriteExisting: overwriteExisting)
         try Task.checkCancellation()
         let info = try await execute("info", ["--xml", "--", peg(location.absoluteString)], authenticated: true)
         let revision = try SVNXML.parseCheckoutRevision(info.stdout)
         let target = location.absoluteString + "@" + revision
         let listing = try await execute("list", ["--xml", "--depth", "infinity", "--revision", revision, "--", target], authenticated: true)
-        return CheckoutPlan(target: target, revision: revision, paths: try SVNXML.parseCheckoutPaths(listing.stdout))
+        let entries = try SVNXML.checkoutListing(listing.stdout)
+        return CheckoutPlan(target: target, revision: revision, paths: entries.paths,
+                            directories: entries.directories, overwriteExisting: overwriteExisting)
     }
 
     public func checkout(plan: CheckoutPlan, destination: URL,
@@ -136,13 +138,39 @@ public struct SVNClient: Sendable {
                                             password: credentials.password, onProgress: onProgress)
         onProgress(.started(totalItems: plan.paths.count, revision: plan.revision))
         try Task.checkCancellation()
-        // Recheck after remote preparation: never merge into files created during the count.
-        try validateCheckoutDestination(destination)
+        // Recheck after preparation; only an explicitly confirmed checkout may merge.
+        try validateCheckoutDestination(destination, overwriteExisting: plan.overwriteExisting)
+        let existing = plan.overwriteExisting ? try checkoutExistingFiles(at: destination, paths: plan.paths, directories: plan.directories) : []
+        var downloaded = false
         do {
-            _ = try await execute("checkout", ["--ignore-externals", "--revision", plan.revision, "--", plan.target, destination.path],
+            let force = plan.overwriteExisting ? ["--force"] : []
+            _ = try await execute("checkout", force + ["--ignore-externals", "--revision", plan.revision, "--", plan.target, destination.path],
                                   authenticated: true, onStdout: { tracker.append($0) }, captureStdout: false)
+            downloaded = true
+            if !existing.isEmpty {
+                tracker.append(Data("正在按仓库版本覆盖 \(existing.count) 个同名文件，其他原有文件保持不变。\n".utf8))
+                // --force adopts obstructing files as local modifications. Restore
+                // only those exact files from the pinned BASE; never revert a tree.
+                var batch: [CheckoutExistingFile] = [], bytes = 0
+                func restore(_ files: [CheckoutExistingFile]) async throws {
+                    try Task.checkCancellation()
+                    for file in files { try file.revalidate(at: destination) }
+                    _ = try await execute("revert", ["--depth", "empty", "--"] + paths(files.map(\.path), at: destination),
+                        at: destination, onStdout: { tracker.append($0) }, captureStdout: false)
+                }
+                for file in existing {
+                    if batch.count >= 128 || bytes + file.path.utf8.count > 32 * 1_024 {
+                        try await restore(batch); batch = []; bytes = 0
+                    }
+                    batch.append(file); bytes += file.path.utf8.count + 2
+                }
+                if !batch.isEmpty { try await restore(batch) }
+            }
         } catch {
             tracker.finish()
+            if downloaded, !(error is CancellationError) {
+                throw SVNError.invalid("仓库签出已完成，但同名文件覆盖未全部完成。请打开工作副本检查，不要直接重复签出。\n\(error.localizedDescription)")
+            }
             throw error
         }
         tracker.finish()

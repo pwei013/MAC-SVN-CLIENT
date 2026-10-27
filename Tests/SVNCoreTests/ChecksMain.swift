@@ -34,6 +34,13 @@ enum ChecksMain {
         let operationProgress = OperationProgressTests()
         let workingFilters = WorkingCopyFilterTests()
         let checks: [(name: String, run: () async throws -> Void)] = [
+            ("checkout-overlay-overwrite-preserve-progress", { try await checkoutProgress.testOverlayOverwritesSameNamesAndKeepsAllOtherFiles() }),
+            ("checkout-overlay-type-symlink-conflicts", { try await checkoutProgress.testOverlayRejectsTypeClashesAndSymlinksBeforeWriting() }),
+            ("checkout-overlay-existing-working-copies", { try await checkoutProgress.testOverlayDoesNotUpdateExistingOrNestedWorkingCopies() }),
+            ("checkout-overlay-concurrent-failure-no-replay", { try await checkoutProgress.testOverlayRechecksFilesAndDoesNotReplayFailedWrites() }),
+            ("checkout-overlay-cancel-before-write", { try await checkoutProgress.testOverlayCancellationBeforeCheckoutLeavesDirectoryUntouched() }),
+            ("checkout-overlay-explicit-file-batches", { try await checkoutProgress.testOverlayBatchesExplicitFilesWithoutTouchingExtras() }),
+            ("checkout-overlay-safe-manifest", { try checkoutProgress.testCheckoutManifestRejectsUnsafeAndDuplicatePaths() }),
             ("working-filter-select-all-visible-eligible", { try workingFilters.testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() }),
             ("working-filter-status-conflicts-properties", { try workingFilters.testStatusGroupsPrioritizeAllConflictKindsAndProperties() }),
             ("working-filter-query-kind-status-selection", { try workingFilters.testPathTypeAndStatusComposeWithoutChangingInput() }),
