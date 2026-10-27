@@ -11,6 +11,7 @@ struct CommitReviewView: View {
     let checkUpdates: () -> Void
     let goBack: () -> Void
     let commit: () -> Void
+    let excludeUncommittable: () -> Void
     var availableSize: CGSize? = nil
 
     private var dialogSize: CGSize {
@@ -33,6 +34,8 @@ struct CommitReviewView: View {
 
     var body: some View {
         let size = dialogSize
+        let blockedCount = changes.filter { !$0.canCommit }.count
+        let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("确认提交到 SVN").font(.title2.bold()).accessibilityIdentifier("commit-review-title")
@@ -43,19 +46,37 @@ struct CommitReviewView: View {
                 .fixedSize(horizontal: false, vertical: true).layoutPriority(1)
             Divider()
             VStack(alignment: .leading, spacing: 10) {
-                Text("以下 \(changes.count) 项将提交到服务器：").font(.headline)
+                Text(blockedCount == 0 ? "以下 \(changes.count) 项将提交到服务器：" :
+                    "已勾选 \(changes.count) 项，其中 \(blockedCount) 项暂不可提交：").font(.headline)
+                if blockedCount > 0 {
+                    HStack {
+                        Text("请先处理下列原因，或取消这些项目的勾选。")
+                            .font(.caption).foregroundStyle(.orange)
+                        Spacer()
+                        Button("取消不可提交项勾选（\(blockedCount)）", action: excludeUncommittable)
+                            .disabled(isBusy)
+                    }
+                }
                 List(changes) { change in
-                    HStack(spacing: 8) {
-                        Text(change.label).foregroundStyle(statusColor(change)).fixedSize()
-                        FileTypeIcon(path: change.path, kind: change.nodeKind)
-                        Text(change.path).font(.system(.callout, design: .monospaced))
-                            .lineLimit(2).truncationMode(.middle).help(change.path)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(change.label).foregroundStyle(statusColor(change)).fixedSize()
+                            FileTypeIcon(path: change.path, kind: change.nodeKind)
+                            Text(change.path).font(.system(.callout, design: .monospaced))
+                                .lineLimit(2).truncationMode(.middle).help(change.path)
+                        }
+                        if let reason = change.commitBlockReason {
+                            Text(reason).font(.caption).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }.frame(minHeight: 0, maxHeight: .infinity)
                     .accessibilityLabel("本次提交文件清单")
                 Text("提交说明").font(.headline)
                 ScrollView {
-                    Text(message).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(hasMessage ? message : "尚未填写提交说明，请返回填写。")
+                        .foregroundStyle(hasMessage ? Color.primary : Color.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 }.frame(height: min(96, size.height * 0.15))
                     .accessibilityLabel("本次提交说明")
@@ -75,7 +96,8 @@ struct CommitReviewView: View {
                     Button("返回检查", action: goBack).keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("commit-review-back")
                     Button("提交到服务器", action: commit).buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction).disabled(isBusy)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isBusy || changes.isEmpty || blockedCount > 0 || !hasMessage)
                         .accessibilityIdentifier("commit-review-submit")
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)

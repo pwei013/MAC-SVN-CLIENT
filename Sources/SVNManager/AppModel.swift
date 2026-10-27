@@ -380,6 +380,10 @@ final class AppModel: ObservableObject {
         return changes.filter { $0.path == changeSelection && $0.item == "unversioned" }.map(\.path)
     }
     var committable: Bool { !checkedChanges.isEmpty && checkedChanges.allSatisfy(\.canCommit) }
+    func uncheckUncommittableChanges() {
+        guard !busy else { return }
+        checkedPaths.subtract(checkedChanges.filter { !$0.canCommit }.map(\.path))
+    }
     var filteredEntries: [RepositoryEntry] {
         let source = searchesSubdirectories ? (repositorySearchResult?.entries ?? entries) : entries
         return source.filter {

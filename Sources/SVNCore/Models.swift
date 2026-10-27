@@ -97,6 +97,21 @@ public struct WorkingCopyChange: Identifiable, Sendable {
         (["modified", "added", "deleted", "replaced"].contains(item) ||
          (["normal", "none"].contains(item) && properties == "modified"))
     }
+    public var commitBlockReason: String? {
+        guard !canCommit else { return nil }
+        if treeConflicted { return "存在树冲突，请先处理冲突。" }
+        if properties == "conflicted" { return "存在属性冲突，请先处理冲突。" }
+        switch item {
+        case "unversioned": return "未跟踪：请先 Add 到版本控制，或取消勾选。"
+        case "missing": return "文件缺失：请先恢复文件或标记为待删除，或取消勾选。"
+        case "ignored": return "已忽略：请先取消忽略并 Add，或取消勾选。"
+        case "conflicted": return "存在内容冲突，请先处理冲突。"
+        case "obstructed": return "路径被阻挡，请检查同名文件或目录的类型。"
+        case "incomplete": return "工作副本状态不完整，请先更新或修复。"
+        case "external": return "外部工作副本，请在对应工作副本中单独提交。"
+        default: return "当前没有可提交变更，请刷新状态或取消勾选。"
+        }
+    }
     public var canCheck: Bool {
         !treeConflicted && properties != "conflicted" &&
         (canCommit || item == "unversioned" || item == "missing")

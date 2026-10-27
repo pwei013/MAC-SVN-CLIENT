@@ -77,6 +77,7 @@ enum ChecksMain {
             ("checkout-overlay-explicit-file-batches", { try await checkoutProgress.testOverlayBatchesExplicitFilesWithoutTouchingExtras() }),
             ("checkout-overlay-safe-manifest", { try checkoutProgress.testCheckoutManifestRejectsUnsafeAndDuplicatePaths() }),
             ("working-filter-select-all-visible-eligible", { try workingFilters.testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() }),
+            ("working-filter-commit-block-reasons", { try workingFilters.testCommitBlockReasonsCoverMixedHiddenSelectionsAndConflicts() }),
             ("working-filter-status-conflicts-properties", { try workingFilters.testStatusGroupsPrioritizeAllConflictKindsAndProperties() }),
             ("working-filter-query-kind-status-selection", { try workingFilters.testPathTypeAndStatusComposeWithoutChangingInput() }),
             ("working-filter-node-kind-metadata", { try workingFilters.testNodeKindsUseMetadataInsteadOfExtensions() }),

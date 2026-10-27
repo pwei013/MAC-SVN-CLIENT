@@ -62,7 +62,7 @@ extension SVNClient {
         let invalid = targets.filter { path in !current.contains { $0.path == path && $0.canCommit } }
         if !invalid.isEmpty {
             let reasons = invalid.prefix(30).map { path in
-                let label = current.first { $0.path == path }?.label ?? "没有可提交变更或路径不存在"
+                let label = current.first { $0.path == path }?.commitBlockReason ?? "没有可提交变更或路径不存在"
                 return safeCommitDiagnostic("\(path)：\(label)", password: credentials.password)
             }
             throw SVNCommitSelectionFailure(issue: .invalidFiles, paths: invalid, reasons: reasons)

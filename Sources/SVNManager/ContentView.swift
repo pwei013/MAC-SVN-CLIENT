@@ -416,11 +416,16 @@ struct ContentView: View {
                         Text("其中 \(model.hiddenCheckedCount) 项不在当前筛选结果中，提交前可在检查清单中核对。")
                             .font(.caption2).foregroundStyle(.orange)
                     }
+                    if model.checkedChanges.contains(where: { !$0.canCommit }) {
+                        Text("勾选中含暂不可提交项，点击“检查并提交”查看原因。")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 Button { model.showCommit = true } label: { Label("检查并提交…", systemImage: "arrow.up.circle.fill") }
                     .buttonStyle(.borderedProminent).controlSize(.regular)
-                    .disabled(model.busy || !model.committable || model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(model.busy || model.checkedChanges.isEmpty)
+                    .help("打开检查清单，核对所有勾选项及无法提交的原因；不会自动提交")
             }
         }.padding(.horizontal, 20).padding(.vertical, 14)
     }
@@ -428,7 +433,8 @@ struct ContentView: View {
     private var commitReview: some View {
         CommitReviewView(repositoryURL: model.workingInfo?.url ?? "", changes: model.checkedChanges,
                          message: model.commitMessage, isBusy: model.busy, statusColor: statusColor,
-                         checkUpdates: model.checkIncomingUpdates, goBack: { model.showCommit = false }, commit: model.commit)
+                         checkUpdates: model.checkIncomingUpdates, goBack: { model.showCommit = false }, commit: model.commit,
+                         excludeUncommittable: model.uncheckUncommittableChanges)
     }
 
     private func unignoreReview(_ request: UnignoreRequest) -> some View {

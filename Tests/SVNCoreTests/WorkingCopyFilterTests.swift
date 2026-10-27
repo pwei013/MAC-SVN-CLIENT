@@ -2,6 +2,24 @@ import Foundation
 import SVNCore
 
 struct WorkingCopyFilterTests {
+    func testCommitBlockReasonsCoverMixedHiddenSelectionsAndConflicts() throws {
+        let valid = [item("outputs", "deleted", kind: .directory), item("modified.cs", "modified"),
+                     item("added.cs", "added"), item("replaced.cs", "replaced"), item("props", "normal", props: "modified")]
+        try expect(valid.allSatisfy { $0.canCommit && $0.commitBlockReason == nil })
+        let pending = (0..<23).map { item("new/file\($0).cs", "unversioned") }
+        let selected = [valid[0]] + pending
+        let shown = try WorkingCopyFilterResult.evaluate(selected, query: "", status: .deleted, kind: .all)
+        try expect(shown.entries.map(\.path) == ["outputs"] && selected.filter { !$0.canCommit }.count == 23)
+        try expect(pending.allSatisfy { $0.commitBlockReason?.contains("Add") == true })
+        try expect(selected.filter(\.canCommit).map(\.path) == ["outputs"])
+        for status in ["missing", "ignored", "conflicted", "obstructed", "incomplete", "external", "normal", "future"] {
+            let change = item("test", status)
+            try expect(!change.canCommit && change.commitBlockReason?.isEmpty == false)
+        }
+        try expect(item("tree", "modified", tree: true).commitBlockReason?.contains("树冲突") == true)
+        try expect(item("property", "added", props: "conflicted").commitBlockReason?.contains("属性冲突") == true)
+    }
+
     func testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() throws {
         let entries = [item("src/modified.cs", "modified"), item("src/new", "unversioned", kind: .directory),
                        item("src/missing.cs", "missing"), item("src/property.cs", "normal", props: "modified"),
