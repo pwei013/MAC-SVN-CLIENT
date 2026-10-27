@@ -99,7 +99,8 @@ struct ContentView: View {
                             recentLocationRow(pinned: model.isWorkingCopyPinned(path),
                                 name: URL(fileURLWithPath: path).lastPathComponent, detail: path,
                                 open: { model.openWorkingCopy(URL(fileURLWithPath: path)) },
-                                togglePin: { model.toggleWorkingCopyPin(path) }) {
+                                togglePin: { model.toggleWorkingCopyPin(path) },
+                                remove: { model.removeRecentWorkingCopy(path) }) {
                                     Label(URL(fileURLWithPath: path).lastPathComponent, systemImage: "folder")
                                         .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -110,7 +111,8 @@ struct ContentView: View {
                         ForEach(model.recentRepositories, id: \.self) { url in
                             recentLocationRow(pinned: model.isRepositoryPinned(url),
                                 name: SVNLocation.display(url), detail: SVNLocation.display(url),
-                                open: { model.browse(url) }, togglePin: { model.toggleRepositoryPin(url) }) {
+                                open: { model.browse(url) }, togglePin: { model.toggleRepositoryPin(url) },
+                                remove: { model.removeRecentRepository(url) }) {
                                     Text(SVNLocation.display(url)).font(.caption).foregroundStyle(.secondary)
                                         .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                 }
@@ -125,7 +127,7 @@ struct ContentView: View {
     }
 
     private func recentLocationRow<LabelContent: View>(pinned: Bool, name: String, detail: String,
-        open: @escaping () -> Void, togglePin: @escaping () -> Void,
+        open: @escaping () -> Void, togglePin: @escaping () -> Void, remove: @escaping () -> Void,
         @ViewBuilder label: () -> LabelContent) -> some View {
         HStack(spacing: 6) {
             Button(action: open, label: label).buttonStyle(.plain).help(detail).disabled(model.busy)
@@ -138,6 +140,9 @@ struct ContentView: View {
         }
         .contextMenu {
             Button(pinned ? "取消固定到顶部" : "固定到顶部", systemImage: pinned ? "pin.slash" : "pin", action: togglePin)
+            Divider()
+            Button("从最近列表移除", systemImage: "trash", role: .destructive, action: remove)
+                .help("仅移除这条记录，保留本地文件、仓库账号和项目草稿")
         }
     }
 

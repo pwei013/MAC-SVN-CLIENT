@@ -56,15 +56,8 @@ struct CheckoutExistingFile {
 /// are neither traversed nor removed. Existing working copies are not updated.
 func checkoutExistingFiles(at destination: URL, paths: Set<String>, directories: Set<String>) throws -> [CheckoutExistingFile] {
     _ = try SVNCheckoutDestination.isNonempty(destination)
-    var ancestor = destination.standardizedFileURL
-    while true {
-        try Task.checkCancellation()
-        if try checkoutLocalAttributes(ancestor.appendingPathComponent(".svn")) != nil {
-            throw SVNError.invalid("签出目标位于已有 SVN 工作副本中。请打开该工作副本进行更新，或选择其他目录签出。")
-        }
-        let parent = ancestor.deletingLastPathComponent().standardizedFileURL
-        if parent.path == ancestor.path { break }
-        ancestor = parent
+    if try checkoutWorkingCopyRoot(at: destination) != nil {
+        throw SVNError.invalid("签出目标的工作副本状态已变化，请重新选择该目录以识别并更新。")
     }
     var directoryCache = Set<String>()
     var missingDirectories = Set<String>()
@@ -105,6 +98,21 @@ func checkoutExistingFiles(at destination: URL, paths: Set<String>, directories:
         }
     }
     return files
+}
+
+/// Walk only ancestors so an ordinary folder needs no SVN process or recursive scan.
+func checkoutWorkingCopyRoot(at destination: URL) throws -> URL? {
+    var ancestor = destination.standardizedFileURL
+    while true {
+        try Task.checkCancellation()
+        if try checkoutLocalAttributes(ancestor.appendingPathComponent(".svn")) != nil {
+            return ancestor
+        }
+        let parent = ancestor.deletingLastPathComponent().standardizedFileURL
+        if parent.path == ancestor.path { break }
+        ancestor = parent
+    }
+    return nil
 }
 
 private func checkoutLocalAttributes(_ url: URL) throws -> [FileAttributeKey: Any]? {

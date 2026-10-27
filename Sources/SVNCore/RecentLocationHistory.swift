@@ -44,6 +44,11 @@ public struct RecentLocationHistory: Sendable {
 
     public mutating func clearRecent() { recent = [] }
 
+    public mutating func remove(_ value: String) {
+        pinned.removeAll { $0 == value }
+        recent.removeAll { $0 == value }
+    }
+
     private static func unique(_ values: [String]) -> [String] {
         var seen = Set<String>()
         return values.filter { !$0.isEmpty && seen.insert($0).inserted }

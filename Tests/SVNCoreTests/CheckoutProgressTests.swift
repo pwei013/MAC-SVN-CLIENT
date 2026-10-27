@@ -60,18 +60,14 @@ struct CheckoutProgressTests {
         try expect(try String(contentsOf: fixture.destination.appendingPathComponent("case1/same.txt/keep.txt"), encoding: .utf8) == "directory blocks file\n")
     }
 
-    func testOverlayDoesNotUpdateExistingOrNestedWorkingCopies() async throws {
+    func testOverlayUpdatesMatchingWorkingCopyButRejectsNestedForeignScope() async throws {
         let fixture = try CheckoutCheckFixture()
         defer { fixture.remove() }
         let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
         let client = SVNClient(executablePath: tools.svn.path)
         _ = try await client.checkout(url: remote, destination: fixture.destination)
         try fixture.write("local working change\n", to: fixture.destination.appendingPathComponent("same.txt"))
-        do {
-            _ = try await client.checkout(url: remote, destination: fixture.destination, overwriteExisting: true)
-            throw CheckFailure.failed("Existing working copies must not silently become an update")
-        } catch let error as CheckFailure { throw error }
-        catch { }
+        _ = try await client.checkout(url: remote, destination: fixture.destination, overwriteExisting: true)
         try expect(try String(contentsOf: fixture.destination.appendingPathComponent("same.txt"), encoding: .utf8) == "local working change\n")
         let outer = fixture.root.appendingPathComponent("outer")
         _ = try await client.checkout(url: remote, destination: outer.appendingPathComponent("shared"))
@@ -83,6 +79,101 @@ struct CheckoutProgressTests {
         catch { }
         try expect(!FileManager.default.fileExists(atPath: outer.appendingPathComponent(".svn").path))
         try expect(try String(contentsOf: outer.appendingPathComponent("shared/same.txt"), encoding: .utf8) == "nested working change\n")
+    }
+
+    func testMatchingWorkingCopyUpdatesAndPreservesEditsExtrasAndScope() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
+        let client = SVNClient(executablePath: tools.svn.path), destination = fixture.destination
+        _ = try await client.checkout(url: remote, destination: destination)
+        let scoped = fixture.root.appendingPathComponent("scoped"), peer = fixture.root.appendingPathComponent("peer")
+        _ = try await client.checkout(url: remote, destination: scoped)
+        _ = try await client.checkout(url: remote, destination: peer)
+        try fixture.write("local working change\n", to: destination.appendingPathComponent("same.txt"))
+        try fixture.write("keep root\n", to: destination.appendingPathComponent("extra.txt"))
+        try fixture.write("keep nested\n", to: destination.appendingPathComponent("shared/extra.txt"))
+        try fixture.write("keep ignored\n", to: destination.appendingPathComponent("cache.tmp"))
+        try fixture.run(tools.svn, ["propset", "svn:ignore", "*.tmp", "--", destination.path + "@"])
+        try fixture.write("local scheduled addition\n", to: destination.appendingPathComponent("added.txt"))
+        _ = try await client.add(at: destination, paths: ["added.txt"])
+        try fixture.write("remote revised\n", to: peer.appendingPathComponent("shared/base.txt"))
+        try fixture.write("remote incoming\n", to: peer.appendingPathComponent("incoming.txt"))
+        _ = try await client.add(at: peer, paths: ["incoming.txt"])
+        _ = try await client.commit(at: peer, paths: ["shared/base.txt", "incoming.txt"], message: "incoming")
+        let events = CheckoutCheckBox<[CheckoutEvent]>([])
+        try await client.checkoutWithProgress(url: remote + "/", destination: destination) { event in events.modify { $0.append(event) } }
+        try expect(try String(contentsOf: destination.appendingPathComponent("same.txt"), encoding: .utf8) == "local working change\n")
+        try expect(try String(contentsOf: destination.appendingPathComponent("shared/base.txt"), encoding: .utf8) == "remote revised\n")
+        try expect(try String(contentsOf: destination.appendingPathComponent("incoming.txt"), encoding: .utf8) == "remote incoming\n")
+        for (path, text) in ["extra.txt": "keep root\n", "shared/extra.txt": "keep nested\n", "cache.tmp": "keep ignored\n", "added.txt": "local scheduled addition\n"] {
+            try expect(try String(contentsOf: destination.appendingPathComponent(path), encoding: .utf8) == text)
+        }
+        let status = try await client.status(at: destination, showIgnored: true)
+        try expect(status.contains { $0.path == "same.txt" && $0.item == "modified" })
+        try expect(status.contains { $0.path == "added.txt" && $0.item == "added" })
+        try expect(status.contains { $0.path == "." && $0.properties == "modified" })
+        try expect(status.contains { $0.path == "cache.tmp" && $0.item == "ignored" })
+        try expect(checkoutCompletedCount(events.read { $0 }) == 1)
+        try expect(checkoutOutputs(events.read { $0 }).flatMap(\.lines).contains { $0.contains("incoming.txt") })
+        _ = try await client.checkout(url: remote + "/shared", destination: scoped.appendingPathComponent("shared"))
+        try expect(try String(contentsOf: scoped.appendingPathComponent("shared/base.txt"), encoding: .utf8) == "remote revised\n")
+        try expect(!FileManager.default.fileExists(atPath: scoped.appendingPathComponent("incoming.txt").path), "Update must stay inside the selected subdirectory")
+    }
+
+    func testMatchingWorkingCopyPostponesConflictsAndRetainsFilesInDeletedDirectories() async throws {
+        let fixture = try CheckoutCheckFixture()
+        defer { fixture.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository()
+        let client = SVNClient(executablePath: tools.svn.path), destination = fixture.destination
+        let peer = fixture.root.appendingPathComponent("peer")
+        _ = try await client.checkout(url: remote, destination: destination)
+        _ = try await client.checkout(url: remote, destination: peer)
+        try fixture.write("local conflicting change\n", to: destination.appendingPathComponent("same.txt"))
+        try fixture.write("local file deleted remotely\n", to: destination.appendingPathComponent("new.txt"))
+        try fixture.write("extra in deleted directory\n", to: destination.appendingPathComponent("shared/extra.txt"))
+        try fixture.write("remote conflicting change\n", to: peer.appendingPathComponent("same.txt"))
+        try fixture.run(tools.svn, ["delete", "--", peer.appendingPathComponent("new.txt").path + "@", peer.appendingPathComponent("shared").path + "@"])
+        try fixture.run(tools.svn, ["commit", "-m", "incoming conflicts and deletions", "--", peer.path + "@"])
+        _ = try await client.checkout(url: remote, destination: destination)
+        let content = try String(contentsOf: destination.appendingPathComponent("same.txt"), encoding: .utf8)
+        try expect(content.contains("local conflicting change") && content.contains("remote conflicting change"))
+        try expect(try String(contentsOf: destination.appendingPathComponent("new.txt"), encoding: .utf8) == "local file deleted remotely\n")
+        try expect(try String(contentsOf: destination.appendingPathComponent("shared/extra.txt"), encoding: .utf8) == "extra in deleted directory\n")
+        let status = try await client.status(at: destination)
+        try expect(status.contains { $0.path == "same.txt" && $0.item == "conflicted" })
+        try expect(status.contains { $0.path == "new.txt" && $0.treeConflicted })
+    }
+
+    func testWorkingCopyRejectsDifferentPathRepositoryAndChangedIdentityBeforeWriting() async throws {
+        let fixture = try CheckoutCheckFixture(), other = try CheckoutCheckFixture()
+        defer { fixture.remove(); other.remove() }
+        let tools = try fixture.localTools(), remote = try fixture.overlayRepository(), foreign = try other.overlayRepository()
+        let client = SVNClient(executablePath: tools.svn.path), destination = fixture.destination
+        _ = try await client.checkout(url: remote, destination: destination)
+        try fixture.write("keep original edit\n", to: destination.appendingPathComponent("same.txt"))
+        for wrong in [remote + "/shared", foreign] {
+            do { _ = try await client.checkout(url: wrong, destination: destination); throw CheckFailure.failed("Foreign scope must not update or switch") }
+            catch let error as CheckFailure { throw error }
+            catch { }
+        }
+        let target = try require(try await client.checkoutWorkingCopy(at: destination, matching: remote))
+        let metadata = destination.appendingPathComponent(".svn"), retained = destination.appendingPathComponent(".svn-retained")
+        try FileManager.default.moveItem(at: metadata, to: retained)
+        do { _ = try await client.updateCheckout(target, at: destination) { _ in }; throw CheckFailure.failed("Changed local metadata must prevent writing") }
+        catch let error as CheckFailure { throw error }
+        catch { }
+        try FileManager.default.moveItem(at: retained, to: metadata)
+        let repository = fixture.root.appendingPathComponent("overlay-repository")
+        try FileManager.default.moveItem(at: repository, to: fixture.root.appendingPathComponent("retained-repository"))
+        try fixture.run(tools.svnadmin, ["create", repository.path])
+        try fixture.run(tools.svn, ["import", "-m", "different UUID", "--", fixture.root.appendingPathComponent("seed").path, remote])
+        do { _ = try await client.checkout(url: remote, destination: destination); throw CheckFailure.failed("Changed server identity must prevent updating") }
+        catch let error as CheckFailure { throw error }
+        catch { }
+        try expect(try String(contentsOf: destination.appendingPathComponent("same.txt"), encoding: .utf8) == "keep original edit\n")
+        let finalInfo = try await client.info(at: destination)
+        try expect(finalInfo.revision == "1")
     }
 
     func testOverlayRechecksFilesAndDoesNotReplayFailedWrites() async throws {

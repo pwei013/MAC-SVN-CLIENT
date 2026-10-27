@@ -54,6 +54,6 @@ extension AppModel {
         guard restoresProjectOnLaunch, !busy, workingDirectory == nil,
               let saved = UserDefaults.standard.string(forKey: "lastWorkingScope"),
               saved.hasPrefix("/") else { return }
-        openWorkingCopy(URL(fileURLWithPath: saved, isDirectory: true))
+        openWorkingCopy(URL(fileURLWithPath: saved, isDirectory: true), rememberLocation: false)
     }
 }

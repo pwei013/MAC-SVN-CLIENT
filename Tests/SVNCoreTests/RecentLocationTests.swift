@@ -2,6 +2,25 @@ import Foundation
 import SVNCore
 
 struct RecentLocationTests {
+    func testRemovingRecentAndPinnedItemsPersistsWithoutChangingOtherHistory() throws {
+        let suite = "com.mky.svnmanager.checks.remove-recent-\(UUID().uuidString)"
+        let defaults = try require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var working = RecentLocationHistory(recent: ["active", "other"], pinned: ["fixed", "keep-fixed"])
+        let repositories = RecentLocationHistory(recent: ["repository"])
+        working.remove("active")
+        working.remove("fixed")
+        working.remove("missing")
+        working.remove("")
+        working.save(to: defaults, recentKey: "working", pinnedKey: "workingPinned")
+        repositories.save(to: defaults, recentKey: "repositories", pinnedKey: "repositoryPinned")
+        let reloaded = RecentLocationHistory(defaults: defaults, recentKey: "working", pinnedKey: "workingPinned")
+        try expect(reloaded.items == ["keep-fixed", "other"] && reloaded.pinned == ["keep-fixed"])
+        try expect(RecentLocationHistory(defaults: defaults, recentKey: "repositories", pinnedKey: "repositoryPinned").items == ["repository"])
+        working.remember("fixed")
+        try expect(working.items == ["keep-fixed", "fixed", "other"] && !working.isPinned("fixed"))
+    }
+
     func testDisplayDecodesChineseAndEmojiWithoutChangingASCIISpelling() throws {
         let encoded = "https://svn.example.invalid/Topone/%E4%B8%AD%E6%96%87/%F0%9F%9A%80/a%2Fb%23c%3Fd%25e%20f"
         let displayed = "https://svn.example.invalid/Topone/中文/🚀/a%2Fb%23c%3Fd%25e%20f"

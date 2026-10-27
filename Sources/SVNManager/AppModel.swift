@@ -391,6 +391,16 @@ final class AppModel: ObservableObject {
         saveWorkingCopyHistory()
     }
 
+    func removeRecentRepository(_ url: String) {
+        repositoryHistory.remove(url)
+        saveRepositoryHistory()
+    }
+
+    func removeRecentWorkingCopy(_ path: String) {
+        workingCopyHistory.remove(path)
+        saveWorkingCopyHistory()
+    }
+
     private func saveRepositoryHistory() {
         repositoryHistory.save(to: .standard, recentKey: "recentRepositories", pinnedKey: "pinnedRepositories")
     }
@@ -622,7 +632,7 @@ final class AppModel: ObservableObject {
         guard !remote.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.title = "选择签出目录"
-        panel.message = "代码将直接签出到所选目录。目录非空时会先确认是否覆盖同名文件，其他原有文件会保留。"
+        panel.message = "已有同一仓库目录的工作副本将直接更新，保留本地修改；其他非空目录先确认是否覆盖同名文件，其余文件会保留。"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
@@ -633,6 +643,9 @@ final class AppModel: ObservableObject {
 
     func checkout(remote: String, destination: URL) {
         run("正在签出代码") {
+            if let existing = try await self.client.checkoutWorkingCopy(at: destination, matching: remote) {
+                return try await self.updateExistingCheckout(existing, at: destination)
+            }
             let inspection = Task.detached(priority: .userInitiated) { try SVNCheckoutDestination.isNonempty(destination) }
             let nonempty = try await withTaskCancellationHandler { try await inspection.value } onCancel: { inspection.cancel() }
             if nonempty, !(try await self.confirmCheckoutOverwrite(at: destination)) {
@@ -654,7 +667,7 @@ final class AppModel: ObservableObject {
                 }
                 try await connection.checkout(plan: plan, destination: destination) { progress.receive($0) }
                 // Never retry checkout after local inspection errors.
-                do { try await self.loadWorkingCopy(destination) }
+                do { try await self.loadWorkingCopy(destination, rememberLocation: true) }
                 catch { throw SVNError.invalid("签出命令已成功，目录：\(destination.path)\n本地状态读取失败，请打开该工作副本检查。\n\(error.localizedDescription)") }
                 self.screen = .workingCopy
                 progress.finish()
@@ -663,6 +676,32 @@ final class AppModel: ObservableObject {
                 progress.finish(error: error)
                 throw error
             }
+        }
+    }
+
+    private func updateExistingCheckout(_ target: SVNCheckoutWorkingCopy, at directory: URL) async throws -> String {
+        operation = "正在更新已有工作副本"
+        let progress = OperationProgressModel(kind: .update, directory: directory)
+        operationProgress = progress
+        progress.startUpdates()
+        do {
+            let connection = try await authenticatedClient(for: target.info.url)
+            do { _ = try await connection.updateCheckout(target, at: directory) { progress.receive($0) } }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                try? await loadWorkingCopy(directory)
+                throw SVNError.invalid("自动更新未完整确认，本地修改和冲突需检查；不会重新签出或覆盖。\n\(error.localizedDescription)")
+            }
+            do { try await loadWorkingCopy(directory, rememberLocation: true) }
+            catch { throw SVNError.invalid("已有工作副本更新命令已完成，但状态读取失败，请刷新核实，不要重复执行。\n\(error.localizedDescription)") }
+            screen = .workingCopy
+            let conflicts = changes.filter { $0.treeConflicted || $0.item == "conflicted" || $0.properties == "conflicted" }.count
+            let summary = conflicts > 0 ? "已有工作副本更新完成 · \(conflicts) 项冲突需要处理" : "已有工作副本更新完成 · 本地修改已保留"
+            progress.finish(summary: summary, warning: conflicts > 0)
+            return summary
+        } catch {
+            progress.finish(error: error)
+            throw error
         }
     }
 
@@ -696,15 +735,15 @@ final class AppModel: ObservableObject {
         openWorkingCopy(url)
     }
 
-    func openWorkingCopy(_ url: URL) {
+    func openWorkingCopy(_ url: URL, rememberLocation: Bool = true) {
         run("正在读取工作副本") {
-            try await self.loadWorkingCopy(url)
+            try await self.loadWorkingCopy(url, rememberLocation: rememberLocation)
             self.screen = .workingCopy
             return "已打开工作副本 · \(url.lastPathComponent)"
         }
     }
 
-    private func loadWorkingCopy(_ directory: URL) async throws {
+    private func loadWorkingCopy(_ directory: URL, rememberLocation: Bool = false) async throws {
         try await persistProjectState()
         let info = try await client.info(at: directory)
         // Keep the explicitly chosen scope rather than silently broadening to the WC root.
@@ -741,8 +780,10 @@ final class AppModel: ObservableObject {
             changeKindFilter = kind
         }
         UserDefaults.standard.set(directory.path, forKey: "lastWorkingScope")
-        workingCopyHistory.remember(directory.path)
-        saveWorkingCopyHistory()
+        if rememberLocation {
+            workingCopyHistory.remember(directory.path)
+            saveWorkingCopyHistory()
+        }
     }
 
     func refresh() {

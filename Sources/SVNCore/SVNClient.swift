@@ -97,6 +97,9 @@ public struct SVNClient: Sendable {
     }
 
     public func checkout(url: String, destination: URL, overwriteExisting: Bool = false) async throws -> String {
+        if let existing = try await checkoutWorkingCopy(at: destination, matching: url) {
+            return try await updateCheckout(existing, at: destination) { _ in }.text
+        }
         if overwriteExisting {
             try await checkoutWithProgress(url: url, destination: destination, overwriteExisting: true) { _ in }
             return "签出完成，目标目录中的其他原有文件已保留。"
@@ -115,6 +118,17 @@ public struct SVNClient: Sendable {
     /// Count and download one immutable revision so remote commits cannot change the denominator.
     public func checkoutWithProgress(url: String, destination: URL, overwriteExisting: Bool = false,
                                      onProgress: @escaping @Sendable (CheckoutEvent) -> Void) async throws {
+        if let existing = try await checkoutWorkingCopy(at: destination, matching: url) {
+            onProgress(.started(totalItems: 0, revision: existing.info.revision))
+            _ = try await updateCheckout(existing, at: destination) { event in
+                if case let .output(records, processed) = event {
+                    onProgress(.output(lines: records.map(\.message), completedItems: processed))
+                }
+            }
+            try Task.checkCancellation()
+            onProgress(.completed)
+            return
+        }
         let plan = try await prepareCheckout(url: url, destination: destination, overwriteExisting: overwriteExisting)
         try await checkout(plan: plan, destination: destination, onProgress: onProgress)
     }

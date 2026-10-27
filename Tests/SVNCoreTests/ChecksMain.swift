@@ -36,7 +36,10 @@ enum ChecksMain {
         let checks: [(name: String, run: () async throws -> Void)] = [
             ("checkout-overlay-overwrite-preserve-progress", { try await checkoutProgress.testOverlayOverwritesSameNamesAndKeepsAllOtherFiles() }),
             ("checkout-overlay-type-symlink-conflicts", { try await checkoutProgress.testOverlayRejectsTypeClashesAndSymlinksBeforeWriting() }),
-            ("checkout-overlay-existing-working-copies", { try await checkoutProgress.testOverlayDoesNotUpdateExistingOrNestedWorkingCopies() }),
+            ("checkout-overlay-existing-working-copies", { try await checkoutProgress.testOverlayUpdatesMatchingWorkingCopyButRejectsNestedForeignScope() }),
+            ("checkout-update-preserve-edits-extras-scope", { try await checkoutProgress.testMatchingWorkingCopyUpdatesAndPreservesEditsExtrasAndScope() }),
+            ("checkout-update-postpone-conflicts-retain-extras", { try await checkoutProgress.testMatchingWorkingCopyPostponesConflictsAndRetainsFilesInDeletedDirectories() }),
+            ("checkout-update-identity-path-revalidation", { try await checkoutProgress.testWorkingCopyRejectsDifferentPathRepositoryAndChangedIdentityBeforeWriting() }),
             ("checkout-overlay-concurrent-failure-no-replay", { try await checkoutProgress.testOverlayRechecksFilesAndDoesNotReplayFailedWrites() }),
             ("checkout-overlay-cancel-before-write", { try await checkoutProgress.testOverlayCancellationBeforeCheckoutLeavesDirectoryUntouched() }),
             ("checkout-overlay-explicit-file-batches", { try await checkoutProgress.testOverlayBatchesExplicitFilesWithoutTouchingExtras() }),
@@ -198,6 +201,9 @@ enum ChecksMain {
             }),
             ("history-deduplicate-recent-limit", {
                 try recentLocations.testHistoryDeduplicatesAndKeepsOnlyLimitedRecentItems()
+            }),
+            ("history-remove-pinned-recent-persistence", {
+                try recentLocations.testRemovingRecentAndPinnedItemsPersistsWithoutChangingOtherHistory()
             }),
             ("history-pin-order-survives-visits", {
                 try recentLocations.testPinnedOrderSurvivesVisitsAndNewPinsGoFirst()
