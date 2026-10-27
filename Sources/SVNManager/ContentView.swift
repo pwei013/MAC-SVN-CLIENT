@@ -114,7 +114,9 @@ struct ContentView: View {
                     if !model.recentWorkingCopies.isEmpty {
                         Text("最近工作副本").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 18)
                         ForEach(model.recentWorkingCopies, id: \.self) { path in
-                            recentLocationRow(pinned: model.isWorkingCopyPinned(path),
+                            RecentLocationRow(pinned: model.isWorkingCopyPinned(path),
+                                isSelected: model.screen == .workingCopy && model.workingDirectory?.standardizedFileURL.path == URL(fileURLWithPath: path).standardizedFileURL.path,
+                                isBusy: model.busy,
                                 name: URL(fileURLWithPath: path).lastPathComponent, detail: path,
                                 open: { model.openWorkingCopy(URL(fileURLWithPath: path)) },
                                 togglePin: { model.toggleWorkingCopyPin(path) },
@@ -127,11 +129,14 @@ struct ContentView: View {
                     if !model.recentRepositories.isEmpty {
                         Text("最近仓库").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 14)
                         ForEach(model.recentRepositories, id: \.self) { url in
-                            recentLocationRow(pinned: model.isRepositoryPinned(url),
+                            RecentLocationRow(pinned: model.isRepositoryPinned(url),
+                                isSelected: model.screen == .repository &&
+                                    (try? RepositoryCredentialScope.canonicalURL(url)) == (try? RepositoryCredentialScope.canonicalURL(model.currentURL)),
+                                isBusy: model.busy,
                                 name: SVNLocation.display(url), detail: SVNLocation.display(url),
                                 open: { model.browse(url) }, togglePin: { model.toggleRepositoryPin(url) },
                                 remove: { model.removeRecentRepository(url) }) {
-                                    Text(SVNLocation.display(url)).font(.caption).foregroundStyle(.secondary)
+                                    Text(SVNLocation.display(url)).font(.caption)
                                         .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                 }
                         }
@@ -142,26 +147,6 @@ struct ContentView: View {
             Button(action: model.chooseWorkingCopy) { Label("打开已有工作副本…", systemImage: "folder.badge.plus") }
                 .disabled(model.busy).padding(18)
         }.background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-    }
-
-    private func recentLocationRow<LabelContent: View>(pinned: Bool, name: String, detail: String,
-        open: @escaping () -> Void, togglePin: @escaping () -> Void, remove: @escaping () -> Void,
-        @ViewBuilder label: () -> LabelContent) -> some View {
-        HStack(spacing: 6) {
-            Button(action: open, label: label).buttonStyle(.plain).help(detail).disabled(model.busy)
-            Button(action: togglePin) {
-                Image(systemName: pinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11)).foregroundStyle(pinned ? Color.indigo : .secondary)
-                    .frame(width: 24, height: 26).contentShape(Rectangle())
-            }.buttonStyle(.plain).help(pinned ? "取消固定到顶部" : "固定到顶部")
-                .accessibilityLabel((pinned ? "取消固定：" : "固定到顶部：") + name)
-        }
-        .contextMenu {
-            Button(pinned ? "取消固定到顶部" : "固定到顶部", systemImage: pinned ? "pin.slash" : "pin", action: togglePin)
-            Divider()
-            Button("从最近列表移除", systemImage: "trash", role: .destructive, action: remove)
-                .help("仅移除这条记录，保留本地文件、仓库账号和项目草稿")
-        }
     }
 
     private func navigationButton(_ title: String, symbol: String, screen: Screen) -> some View {
