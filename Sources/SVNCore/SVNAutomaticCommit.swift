@@ -14,12 +14,19 @@ extension SVNClient {
     /// required parents. All reads and writes run outside the UI actor. Never
     /// recurse into existing modified/added directories to enlarge selection.
     public func commitIncludingUnversionedWithProgress(at requestedDirectory: URL, paths requested: [String], message: String,
+        reviewed: SVNCommitReview? = nil,
         onProgress: @escaping @Sendable (SVNOperationEvent) -> Void) async throws -> SVNOperationResult {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SVNError.invalid("请填写提交说明。")
         }
         let directory = requestedDirectory.standardizedFileURL.resolvingSymlinksInPath()
         let targets = Array(Set(requested)).sorted()
+        if let reviewed {
+            let current = try await prepareCommitReview(at: directory, paths: targets)
+            guard reviewed.matches(current) else {
+                throw SVNError.invalid("提交清单或文件在确认后发生变化，请返回并重新读取清单；本次尚未 Add 或提交。")
+            }
+        }
         _ = try paths(targets, at: directory)
         try automaticCommitSizeCheck(targets)
         for path in targets where path != "." {
@@ -116,6 +123,9 @@ extension SVNClient {
                 onProgress(.preparing("自动 Add 已完成，正在核对 \(prepared.count) 项并提交。"))
             }
             let commitPaths = prepared.sorted()
+            if let reviewed, Set(commitPaths) != Set(reviewed.entries.map(\.path)) {
+                throw SVNError.invalid("自动 Add 后的实际清单与确认清单不一致，已停止提交；已发生的 Add 和本地文件保留，请重新检查。")
+            }
             try automaticCommitSizeCheck(commitPaths)
             try Task.checkCancellation()
             return try await commitValidatedWithProgress(at: directory, paths: commitPaths, message: message,
@@ -126,7 +136,7 @@ extension SVNClient {
         }
     }
 
-    private func automaticCommitStatuses(at directory: URL, targets: [String]? = nil) async throws -> [String: WorkingCopyChange] {
+    func automaticCommitStatuses(at directory: URL, targets: [String]? = nil) async throws -> [String: WorkingCopyChange] {
         var batches: [[String]] = []
         if let targets {
             var batch: [String] = [], size = 0
@@ -151,13 +161,13 @@ extension SVNClient {
     }
 }
 
-private func automaticCommitAncestors(_ path: String) -> [String] {
+func automaticCommitAncestors(_ path: String) -> [String] {
     let components = path.split(separator: "/")
     guard components.count > 1 else { return [] }
     return (1..<components.count).map { components.prefix($0).joined(separator: "/") }
 }
 
-private func automaticCommitSizeCheck(_ targets: [String]) throws {
+func automaticCommitSizeCheck(_ targets: [String]) throws {
     guard !targets.isEmpty, targets.count <= 20_000,
           targets.reduce(0, { $0 + $1.utf8.count + 2 }) <= 96_000 else {
         throw SVNError.invalid("自动提交清单过大，请分批选择文件或子目录；已发生的 Add 会保留，请刷新核对。")

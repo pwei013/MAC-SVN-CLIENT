@@ -12,6 +12,10 @@ struct CommitReviewView: View {
     let goBack: () -> Void
     let commit: () -> Void
     let excludeUncommittable: () -> Void
+    var review: SVNCommitReview? = nil
+    var isReading = false
+    var readError: String? = nil
+    var reload: () -> Void = {}
     var availableSize: CGSize? = nil
 
     private var dialogSize: CGSize {
@@ -37,6 +41,7 @@ struct CommitReviewView: View {
         let blockedCount = changes.filter { !$0.canSubmitWithAutomaticAdd }.count
         let automaticAddCount = changes.filter { $0.item == "unversioned" && $0.canSubmitWithAutomaticAdd }.count
         let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let entries = review?.entries ?? changes
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("确认提交到 SVN").font(.title2.bold()).accessibilityIdentifier("commit-review-title")
@@ -47,10 +52,26 @@ struct CommitReviewView: View {
                 .fixedSize(horizontal: false, vertical: true).layoutPriority(1)
             Divider()
             VStack(alignment: .leading, spacing: 10) {
-                Text(blockedCount == 0 ? "以下 \(changes.count) 项将提交到服务器：" :
-                    "已勾选 \(changes.count) 项，其中 \(blockedCount) 项暂不可提交：").font(.headline)
+                if let review {
+                    HStack {
+                        Text("共 \(review.fileCount) 个文件 · \(review.directoryCount) 个目录").font(.headline)
+                            .accessibilityIdentifier("commit-review-total")
+                        Spacer()
+                        Button("重新读取", action: reload).disabled(isBusy || isReading)
+                    }
+                    Text("已展开未跟踪文件夹，排除 SVN 忽略项；下方为本次实际提交清单。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if isReading {
+                    HStack { ProgressView().controlSize(.small); Text("正在读取实际提交文件清单…") }
+                } else if let readError {
+                    Text(readError).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("重新读取", action: reload).disabled(isBusy)
+                } else {
+                    Text("已勾选 \(changes.count) 项，其中 \(blockedCount) 项暂不可提交：").font(.headline)
+                }
                 if automaticAddCount > 0 {
-                    Text("其中 \(automaticAddCount) 项未跟踪，确认后先自动 Add，再与其他勾选项一起提交。")
+                    Text("确认后先自动 Add 清单中的未跟踪文件和目录，再与其他勾选项一起提交。")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if blockedCount > 0 {
@@ -62,7 +83,7 @@ struct CommitReviewView: View {
                             .disabled(isBusy)
                     }
                 }
-                List(changes) { change in
+                List(entries) { change in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
                             Text(change.label).foregroundStyle(statusColor(change)).fixedSize()
@@ -89,7 +110,7 @@ struct CommitReviewView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                Text("未跟踪目录会递归 Add 并提交其中未被忽略的内容；必要的新父目录会自动补齐。其他未勾选的已有修改保留在本地。")
+                Text("必要的新父目录已计入清单，文件数不含目录。提交前再次核对，清单变化时停止并要求重新检查。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if changes.contains(where: { $0.item == "deleted" && $0.nodeKind == .directory }) {
                     Text("提交待删除目录会同时删除其仓库子项；本地文件是否保留取决于删除时的选择。")
@@ -102,7 +123,7 @@ struct CommitReviewView: View {
                         .accessibilityIdentifier("commit-review-back")
                     Button(automaticAddCount > 0 ? "Add 并提交到服务器" : "提交到服务器", action: commit).buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
-                        .disabled(isBusy || changes.isEmpty || blockedCount > 0 || !hasMessage)
+                        .disabled(isBusy || isReading || review == nil || changes.isEmpty || blockedCount > 0 || !hasMessage)
                         .accessibilityIdentifier("commit-review-submit")
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)

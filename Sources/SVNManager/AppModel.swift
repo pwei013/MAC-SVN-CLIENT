@@ -109,6 +109,11 @@ final class AppModel: ObservableObject {
     @Published var showDiff = false
     @Published var showSettings = false
     @Published var showCommit = false
+    @Published private(set) var commitReviewManifest: SVNCommitReview?
+    @Published private(set) var isReadingCommitReview = false
+    @Published private(set) var commitReviewError: String?
+    @Published var commitReviewReadVersion = UUID()
+    private var commitReviewReadID = UUID()
     @Published var localActionPlan: SVNLocalActionPlan?
     @Published var conflictSession: ConflictSession?
     @Published var conflictResolution: SVNConflictResolution?
@@ -1035,9 +1040,41 @@ final class AppModel: ObservableObject {
         } onCancel: { worker.cancel() }
     }
 
+    var commitReviewReadKey: String {
+        ([workingDirectory?.path ?? "", executablePath, commitReviewReadVersion.uuidString] + globalIgnorePatterns +
+         checkedChanges.map { "\($0.path)\0\($0.item)\0\($0.properties)\0\($0.treeConflicted)" }).joined(separator: "\0")
+    }
+
+    func readCommitReview() async {
+        let id = UUID()
+        commitReviewReadID = id
+        commitReviewManifest = nil
+        commitReviewError = nil
+        guard let directory = workingDirectory, committable else { isReadingCommitReview = false; return }
+        let paths = checkedChanges.map(\.path)
+        let connection = client
+        isReadingCommitReview = true
+        defer { if commitReviewReadID == id { isReadingCommitReview = false } }
+        do {
+            let manifest = try await connection.prepareCommitReview(at: directory, paths: paths)
+            guard !Task.isCancelled, commitReviewReadID == id, directory == workingDirectory,
+                  Set(paths) == Set(checkedChanges.map(\.path)) else { return }
+            commitReviewManifest = manifest
+        } catch is CancellationError { }
+        catch {
+            guard !Task.isCancelled, commitReviewReadID == id else { return }
+            commitReviewError = error.localizedDescription
+        }
+    }
+
     func commit() {
         guard !busy, let directory = workingDirectory, committable else { return }
         let paths = checkedChanges.map(\.path)
+        guard !isReadingCommitReview, let reviewed = commitReviewManifest, reviewed.directory == directory.standardizedFileURL.resolvingSymlinksInPath(),
+              Set(reviewed.selectedPaths) == Set(paths) else {
+            commitReviewError = "请先完整读取并核对实际提交清单。"
+            return
+        }
         let message = commitMessage
         lastCommitRecovery = nil
         commitRecovery = nil
@@ -1054,7 +1091,8 @@ final class AppModel: ObservableObject {
         }) {
             do {
                 let connection = try await self.authenticatedWorkingClient(at: directory)
-                let result = try await connection.commitIncludingUnversionedWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) }
+                let result = try await connection.commitIncludingUnversionedWithProgress(at: directory, paths: paths, message: message,
+                                                                                         reviewed: reviewed) { progress.receive($0) }
                 self.commitMessage = ""
                 self.checkedPaths = []
                 self.listingCache.invalidateAll()

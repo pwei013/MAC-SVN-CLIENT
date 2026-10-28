@@ -33,6 +33,7 @@ enum ChecksMain {
         let decoration = ComparisonDecorationTests()
         let operationProgress = OperationProgressTests()
         let automaticCommit = AutomaticCommitTests()
+        let commitReview = CommitReviewTests()
         let workingFilters = WorkingCopyFilterTests()
         let localActions = LocalActionTests()
         let recovery = CommitRecoveryTests()
@@ -79,6 +80,14 @@ enum ChecksMain {
             ("checkout-overlay-safe-manifest", { try checkoutProgress.testCheckoutManifestRejectsUnsafeAndDuplicatePaths() }),
             ("working-filter-select-all-visible-eligible", { try workingFilters.testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() }),
             ("automatic-commit-mixed-ignored-unselected", { try await automaticCommit.testMixedSelectionAddsNewTreesAndPreservesEverythingElse() }),
+            ("commit-review-readonly-expansion-counts", { try await commitReview.testReadOnlyExpansionMatchesCommittedFilesAndCounts() }),
+            ("commit-review-config-inherited-ignore-scope", { try await commitReview.testUserConfigAndInheritedPropertiesExcludeOnlyApplicableNames() }),
+            ("commit-review-leaf-empty-symlink", { try await commitReview.testLeafParentsEmptyDirectoryAndSymlinkAreListedWithoutFollowingLinks() }),
+            ("commit-review-change-reload", { try await commitReview.testChangedManifestStopsBeforeAddAndCanBeReloaded() }),
+            ("commit-review-ignore-change-nested-boundary", { try await commitReview.testChangedIgnoreRulesAndNestedWorkingCopyNeverCommitUnreviewedFiles() }),
+            ("commit-review-deleted-cancel-readonly", { try await commitReview.testDeletedFilesCountAndCancellationRemainReadOnly() }),
+            ("commit-review-file-arriving-during-add", { try await commitReview.testFileArrivingDuringAddStopsBeforeRemoteCommit() }),
+            ("commit-review-large-folder-batched-reads", { try await commitReview.testLargeFolderUsesBatchedSVNReads() }),
             ("automatic-commit-only-required-new-parents", { try await automaticCommit.testOnlyRequiredParentsAreIncludedForAnExplicitNewFile() }),
             ("automatic-commit-existing-added-parent", { try await automaticCommit.testAlreadyAddedParentsDoNotPullInUnselectedAddedSiblings() }),
             ("automatic-commit-preflight-ignored-missing", { try await automaticCommit.testIgnoredAndMissingSelectionsStopBeforeAnyAddOrCommit() }),

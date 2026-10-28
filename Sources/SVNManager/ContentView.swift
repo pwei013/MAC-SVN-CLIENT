@@ -434,7 +434,10 @@ struct ContentView: View {
         CommitReviewView(repositoryURL: model.workingInfo?.url ?? "", changes: model.checkedChanges,
                          message: model.commitMessage, isBusy: model.busy, statusColor: statusColor,
                          checkUpdates: model.checkIncomingUpdates, goBack: { model.showCommit = false }, commit: model.commit,
-                         excludeUncommittable: model.uncheckUncommittableChanges)
+                         excludeUncommittable: model.uncheckUncommittableChanges,
+                         review: model.commitReviewManifest, isReading: model.isReadingCommitReview,
+                         readError: model.commitReviewError, reload: { model.commitReviewReadVersion = UUID() })
+            .task(id: model.commitReviewReadKey) { await model.readCommitReview() }
     }
 
     private func unignoreReview(_ request: UnignoreRequest) -> some View {
