@@ -12,12 +12,16 @@ struct WorkingCopyFilterTests {
         try expect(shown.entries.map(\.path) == ["outputs"] && selected.filter { !$0.canCommit }.count == 23)
         try expect(pending.allSatisfy { $0.commitBlockReason?.contains("Add") == true })
         try expect(selected.filter(\.canCommit).map(\.path) == ["outputs"])
+        try expect(selected.allSatisfy(\.canSubmitWithAutomaticAdd), "New files are eligible for the automatic Add workflow")
         for status in ["missing", "ignored", "conflicted", "obstructed", "incomplete", "external", "normal", "future"] {
             let change = item("test", status)
             try expect(!change.canCommit && change.commitBlockReason?.isEmpty == false)
+            try expect(!change.canSubmitWithAutomaticAdd)
         }
         try expect(item("tree", "modified", tree: true).commitBlockReason?.contains("树冲突") == true)
         try expect(item("property", "added", props: "conflicted").commitBlockReason?.contains("属性冲突") == true)
+        try expect(!item("tree-new", "unversioned", tree: true).canSubmitWithAutomaticAdd)
+        try expect(!item("props-new", "unversioned", props: "conflicted").canSubmitWithAutomaticAdd)
     }
 
     func testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() throws {

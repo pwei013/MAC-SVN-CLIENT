@@ -18,6 +18,7 @@ public struct SVNOperationMetadata: Sendable {
 }
 
 public enum SVNOperationEvent: Sendable {
+    case preparing(String)
     case started(total: Int?)
     case output(records: [SVNOperationRecord], processed: Int)
     case commandCompleted(revision: String?)
@@ -28,6 +29,7 @@ public enum SVNOperationEvent: Sendable {
 public struct SVNOperationResult: Sendable {
     public let text: String
     public let revision: String?
+    public let paths: [String]
 }
 
 extension SVNClient {
@@ -54,6 +56,12 @@ extension SVNClient {
 
     public func commitWithProgress(at directory: URL, paths targets: [String], message: String,
         onProgress: @escaping @Sendable (SVNOperationEvent) -> Void) async throws -> SVNOperationResult {
+        try await commitValidatedWithProgress(at: directory, paths: targets, message: message,
+                                              firstRecordID: 0, onProgress: onProgress)
+    }
+
+    func commitValidatedWithProgress(at directory: URL, paths targets: [String], message: String, firstRecordID: Int,
+        onProgress: @escaping @Sendable (SVNOperationEvent) -> Void) async throws -> SVNOperationResult {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !targets.isEmpty else {
             throw SVNError.invalid("请勾选文件并填写提交说明。")
         }
@@ -76,7 +84,7 @@ extension SVNClient {
                 reasons: missingParents.map { safeCommitDiagnostic($0, password: credentials.password) })
         }
         let tracker = SVNOperationTracker(kind: .commit, directory: directory, targets: Set(targets),
-                                          password: credentials.password, onProgress: onProgress)
+                                          password: credentials.password, firstRecordID: firstRecordID, onProgress: onProgress)
         onProgress(.started(total: Set(targets).count))
         do {
             _ = try await execute("commit", ["--depth", "empty", "--message", message, "--"] + checked,
@@ -151,7 +159,7 @@ private func operationRelativePath(_ value: String, directory: URL) -> String? {
 
 /// The pipe reader never enters the main actor. Complete UTF-8 lines, bounded
 /// partial lines and a bounded notification history keep output memory stable.
-private final class SVNOperationTracker: @unchecked Sendable {
+final class SVNOperationTracker: @unchecked Sendable {
     private let lock = NSLock()
     private let kind: SVNOperationKind
     private let directory: URL
@@ -169,10 +177,11 @@ private final class SVNOperationTracker: @unchecked Sendable {
     private var tail: [String] = []
     private var revision: String?
 
-    init(kind: SVNOperationKind, directory: URL, targets: Set<String>, password: String,
+    init(kind: SVNOperationKind, directory: URL, targets: Set<String>, password: String, firstRecordID: Int = 0,
          onProgress: @escaping @Sendable (SVNOperationEvent) -> Void) {
         self.kind = kind; self.directory = directory; self.targets = targets
         self.password = password; self.onProgress = onProgress
+        self.nextID = firstRecordID
     }
 
     func append(_ chunk: Data) {
@@ -204,8 +213,10 @@ private final class SVNOperationTracker: @unchecked Sendable {
 
     var result: SVNOperationResult {
         lock.lock(); defer { lock.unlock() }
-        return SVNOperationResult(text: tail.joined(separator: "\n"), revision: revision)
+        return SVNOperationResult(text: tail.joined(separator: "\n"), revision: revision, paths: targets.sorted())
     }
+
+    var nextRecordID: Int { lock.lock(); defer { lock.unlock() }; return nextID }
 
     var metadataPaths: [String] {
         lock.lock(); defer { lock.unlock() }
@@ -242,6 +253,12 @@ private final class SVNOperationTracker: @unchecked Sendable {
                 else { action = "更新" }
             }
         } else if !truncated, kind == .commit {
+            let addHeader = String(text.prefix(10))
+            if addHeader.count == 10, addHeader.hasPrefix("A "),
+               addHeader.dropFirst().replacingOccurrences(of: "(bin)", with: "").allSatisfy({ $0 == " " }),
+               let value = operationRelativePath(String(text.dropFirst(10)), directory: directory) {
+                path = value; action = "Add"
+            }
             for (prefix, label) in [("Sending", "发送"), ("Adding", "新增"), ("Deleting", "删除"), ("Replacing", "替换")] {
                 guard text.hasPrefix(prefix + " ") else { continue }
                 var rest = text.dropFirst(prefix.count).drop(while: { $0 == " " })

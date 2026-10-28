@@ -44,7 +44,7 @@ extension AppModel {
     }
     func checkVisibleCommittableChanges() {
         guard !busy, !isFilteringChanges else { return }
-        checkedPaths.formUnion(filteredChanges.filter(\.canCommit).map(\.path))
+        checkedPaths.formUnion(filteredChanges.filter(\.canSubmitWithAutomaticAdd).map(\.path))
     }
 }
 

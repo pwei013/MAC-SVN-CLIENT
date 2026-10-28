@@ -379,10 +379,10 @@ final class AppModel: ObservableObject {
         if !checked.isEmpty { return checked }
         return changes.filter { $0.path == changeSelection && $0.item == "unversioned" }.map(\.path)
     }
-    var committable: Bool { !checkedChanges.isEmpty && checkedChanges.allSatisfy(\.canCommit) }
+    var committable: Bool { !checkedChanges.isEmpty && checkedChanges.allSatisfy(\.canSubmitWithAutomaticAdd) }
     func uncheckUncommittableChanges() {
         guard !busy else { return }
-        checkedPaths.subtract(checkedChanges.filter { !$0.canCommit }.map(\.path))
+        checkedPaths.subtract(checkedChanges.filter { !$0.canSubmitWithAutomaticAdd }.map(\.path))
     }
     var filteredEntries: [RepositoryEntry] {
         let source = searchesSubdirectories ? (repositorySearchResult?.entries ?? entries) : entries
@@ -1048,20 +1048,30 @@ final class AppModel: ObservableObject {
         operationProgress = progress
         progress.startUpdates()
         run("正在提交变更", canCancel: false, onFailure: { error in
-            await self.presentCommitRecovery(error, directory: directory, paths: paths, progress: progress)
+            let automatic = error as? SVNAutomaticCommitFailure
+            return await self.presentCommitRecovery(automatic?.underlying ?? error, directory: directory,
+                paths: automatic?.paths ?? paths, progress: progress)
         }) {
             do {
                 let connection = try await self.authenticatedWorkingClient(at: directory)
-                let result = try await connection.commitWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) }
+                let result = try await connection.commitIncludingUnversionedWithProgress(at: directory, paths: paths, message: message) { progress.receive($0) }
                 self.commitMessage = ""
                 self.checkedPaths = []
                 self.listingCache.invalidateAll()
                 try await self.refreshAfterWrite(directory, result: "SVN 已确认提交成功")
-                let summary = result.revision.map { "提交成功 · r\($0) · \(paths.count) 项" } ?? "提交成功 · \(paths.count) 项"
+                let summary = result.revision.map { "提交成功 · r\($0) · \(result.paths.count) 项" } ?? "提交成功 · \(result.paths.count) 项"
                 progress.finish(summary: summary)
                 return summary
             } catch {
-                progress.finish(error: error)
+                let automatic = error as? SVNAutomaticCommitFailure
+                progress.finish(error: automatic?.underlying ?? error)
+                if let automatic {
+                    try? await self.loadWorkingCopy(directory)
+                    if automatic.additionCompleted {
+                        let available = Set(self.changes.filter(\.canSubmitWithAutomaticAdd).map(\.path))
+                        self.checkedPaths.formUnion(Set(automatic.paths).intersection(available))
+                    }
+                }
                 throw error
             }
         }

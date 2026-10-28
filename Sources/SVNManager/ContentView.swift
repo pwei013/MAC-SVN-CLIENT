@@ -416,7 +416,7 @@ struct ContentView: View {
                         Text("其中 \(model.hiddenCheckedCount) 项不在当前筛选结果中，提交前可在检查清单中核对。")
                             .font(.caption2).foregroundStyle(.orange)
                     }
-                    if model.checkedChanges.contains(where: { !$0.canCommit }) {
+                    if model.checkedChanges.contains(where: { !$0.canSubmitWithAutomaticAdd }) {
                         Text("勾选中含暂不可提交项，点击“检查并提交”查看原因。")
                             .font(.caption2).foregroundStyle(.orange)
                     }

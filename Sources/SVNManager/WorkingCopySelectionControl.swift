@@ -24,7 +24,7 @@ struct WorkingCopySelectionControl: View {
                 Button("全选当前结果", action: model.checkAllVisibleChanges)
                     .disabled(model.changeFilterResult.checkablePaths.isSubset(of: model.checkedPaths))
                 Button("勾选可提交项", action: model.checkVisibleCommittableChanges)
-                    .help("勾选当前结果中的可提交项目，保留其他勾选")
+                    .help("勾选当前结果中可直接提交或自动 Add 后提交的项目，保留其他勾选")
                 Button("取消当前结果勾选", action: model.uncheckVisibleChanges)
                     .disabled(model.checkedPaths.isDisjoint(with: model.changeFilterResult.visiblePaths))
                 Divider()

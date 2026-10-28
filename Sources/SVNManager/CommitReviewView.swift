@@ -34,7 +34,8 @@ struct CommitReviewView: View {
 
     var body: some View {
         let size = dialogSize
-        let blockedCount = changes.filter { !$0.canCommit }.count
+        let blockedCount = changes.filter { !$0.canSubmitWithAutomaticAdd }.count
+        let automaticAddCount = changes.filter { $0.item == "unversioned" && $0.canSubmitWithAutomaticAdd }.count
         let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
@@ -48,6 +49,10 @@ struct CommitReviewView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(blockedCount == 0 ? "以下 \(changes.count) 项将提交到服务器：" :
                     "已勾选 \(changes.count) 项，其中 \(blockedCount) 项暂不可提交：").font(.headline)
+                if automaticAddCount > 0 {
+                    Text("其中 \(automaticAddCount) 项未跟踪，确认后先自动 Add，再与其他勾选项一起提交。")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if blockedCount > 0 {
                     HStack {
                         Text("请先处理下列原因，或取消这些项目的勾选。")
@@ -65,7 +70,7 @@ struct CommitReviewView: View {
                             Text(change.path).font(.system(.callout, design: .monospaced))
                                 .lineLimit(2).truncationMode(.middle).help(change.path)
                         }
-                        if let reason = change.commitBlockReason {
+                        if !change.canSubmitWithAutomaticAdd, let reason = change.commitBlockReason {
                             Text(reason).font(.caption).foregroundStyle(.orange)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -84,7 +89,7 @@ struct CommitReviewView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                Text("只提交勾选项。新建目录的父路径也需勾选；未勾选的子文件会保留在本地。")
+                Text("未跟踪目录会递归 Add 并提交其中未被忽略的内容；必要的新父目录会自动补齐。其他未勾选的已有修改保留在本地。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if changes.contains(where: { $0.item == "deleted" && $0.nodeKind == .directory }) {
                     Text("提交待删除目录会同时删除其仓库子项；本地文件是否保留取决于删除时的选择。")
@@ -95,7 +100,7 @@ struct CommitReviewView: View {
                     Spacer()
                     Button("返回检查", action: goBack).keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("commit-review-back")
-                    Button("提交到服务器", action: commit).buttonStyle(.borderedProminent)
+                    Button(automaticAddCount > 0 ? "Add 并提交到服务器" : "提交到服务器", action: commit).buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .disabled(isBusy || changes.isEmpty || blockedCount > 0 || !hasMessage)
                         .accessibilityIdentifier("commit-review-submit")

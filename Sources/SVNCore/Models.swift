@@ -97,6 +97,9 @@ public struct WorkingCopyChange: Identifiable, Sendable {
         (["modified", "added", "deleted", "replaced"].contains(item) ||
          (["normal", "none"].contains(item) && properties == "modified"))
     }
+    public var canSubmitWithAutomaticAdd: Bool {
+        canCommit || (item == "unversioned" && !treeConflicted && properties != "conflicted")
+    }
     public var commitBlockReason: String? {
         guard !canCommit else { return nil }
         if treeConflicted { return "存在树冲突，请先处理冲突。" }

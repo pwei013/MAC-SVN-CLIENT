@@ -32,6 +32,7 @@ enum ChecksMain {
         let incoming = IncomingUpdatesTests()
         let decoration = ComparisonDecorationTests()
         let operationProgress = OperationProgressTests()
+        let automaticCommit = AutomaticCommitTests()
         let workingFilters = WorkingCopyFilterTests()
         let localActions = LocalActionTests()
         let recovery = CommitRecoveryTests()
@@ -77,6 +78,15 @@ enum ChecksMain {
             ("checkout-overlay-explicit-file-batches", { try await checkoutProgress.testOverlayBatchesExplicitFilesWithoutTouchingExtras() }),
             ("checkout-overlay-safe-manifest", { try checkoutProgress.testCheckoutManifestRejectsUnsafeAndDuplicatePaths() }),
             ("working-filter-select-all-visible-eligible", { try workingFilters.testSelectAllUsesVisibleEligibleRowsAndPreservesHiddenChecks() }),
+            ("automatic-commit-mixed-ignored-unselected", { try await automaticCommit.testMixedSelectionAddsNewTreesAndPreservesEverythingElse() }),
+            ("automatic-commit-only-required-new-parents", { try await automaticCommit.testOnlyRequiredParentsAreIncludedForAnExplicitNewFile() }),
+            ("automatic-commit-existing-added-parent", { try await automaticCommit.testAlreadyAddedParentsDoNotPullInUnselectedAddedSiblings() }),
+            ("automatic-commit-preflight-ignored-missing", { try await automaticCommit.testIgnoredAndMissingSelectionsStopBeforeAnyAddOrCommit() }),
+            ("automatic-commit-partial-add-no-replay", { try await automaticCommit.testPartialAddFailureIsNotReplayedAndNeverStartsCommit() }),
+            ("automatic-commit-rejection-preserves-add", { try await automaticCommit.testRejectedCommitKeepsAddAndReportsTheExpandedScope() }),
+            ("automatic-commit-cancel-symlink-boundary", { try await automaticCommit.testCancellationAndSymlinkParentDoNotWrite() }),
+            ("automatic-commit-native-inherited-ignores", { try await automaticCommit.testInheritedNativeIgnoresApplyInsideNewParentsAndTrees() }),
+            ("automatic-commit-nested-working-copy", { try await automaticCommit.testNestedWorkingCopyIsNeverSweptIntoTheNewTree() }),
             ("working-filter-commit-block-reasons", { try workingFilters.testCommitBlockReasonsCoverMixedHiddenSelectionsAndConflicts() }),
             ("working-filter-status-conflicts-properties", { try workingFilters.testStatusGroupsPrioritizeAllConflictKindsAndProperties() }),
             ("working-filter-query-kind-status-selection", { try workingFilters.testPathTypeAndStatusComposeWithoutChangingInput() }),

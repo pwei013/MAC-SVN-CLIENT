@@ -2,6 +2,7 @@ import SwiftUI
 import SVNCore
 
 private struct OperationBatch {
+    var preparation: String?
     var started = false
     var total: Int?
     var records: [SVNOperationRecord] = []
@@ -18,6 +19,7 @@ private final class OperationEventBuffer: @unchecked Sendable {
     func receive(_ event: SVNOperationEvent) {
         lock.lock(); defer { lock.unlock() }
         switch event {
+        case .preparing(let detail): batch.preparation = detail
         case .started(let total): batch.started = true; batch.total = total
         case let .output(records, processed):
             batch.records.append(contentsOf: records)
@@ -85,6 +87,7 @@ final class OperationProgressModel: ObservableObject, Identifiable {
     }
     private func flush() {
         let value = buffer.drain()
+        if let detail = value.preparation, !value.started && !commandStarted { self.detail = detail }
         if value.started {
             commandStarted = true
             total = value.total; phase = .running
