@@ -111,21 +111,7 @@ struct ContentView: View {
             }.padding(.horizontal, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 9) {
-                    if !model.recentWorkingCopies.isEmpty {
-                        Text("最近工作副本").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 18)
-                        ForEach(model.recentWorkingCopies, id: \.self) { path in
-                            RecentLocationRow(pinned: model.isWorkingCopyPinned(path),
-                                isSelected: model.screen == .workingCopy && model.workingDirectory?.standardizedFileURL.path == URL(fileURLWithPath: path).standardizedFileURL.path,
-                                isBusy: model.busy,
-                                name: URL(fileURLWithPath: path).lastPathComponent, detail: path,
-                                open: { model.openWorkingCopy(URL(fileURLWithPath: path)) },
-                                togglePin: { model.toggleWorkingCopyPin(path) },
-                                remove: { model.removeRecentWorkingCopy(path) }) {
-                                    Label(URL(fileURLWithPath: path).lastPathComponent, systemImage: "folder")
-                                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                        }
-                    }
+                    RecentWorkingCopiesView(model: model)
                     if !model.recentRepositories.isEmpty {
                         Text("最近仓库").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 14)
                         ForEach(model.recentRepositories, id: \.self) { url in
