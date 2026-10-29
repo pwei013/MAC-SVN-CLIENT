@@ -38,7 +38,19 @@ enum ChecksMain {
         let localActions = LocalActionTests()
         let recovery = CommitRecoveryTests()
         let conflicts = ConflictResolutionTests()
+        let permissions = RepositoryPermissionTests()
         let checks: [(name: String, run: () async throws -> Void)] = [
+            ("permission-management-endpoint-token-boundaries", { try permissions.testEndpointAndTokenBoundaries() }),
+            ("permission-management-inspect-scope-malformed", { try await permissions.testInspectionScopeAndMalformedResponses() }),
+            ("permission-management-inspect-rule-ancestors", { try await permissions.testInspectionRejectsForeignAndDuplicateRules() }),
+            ("permission-management-prepare-pinned-review", { try await permissions.testPreparePinsReviewedAccountScopeAndVersion() }),
+            ("permission-management-readonly-expired-no-write", { try await permissions.testReadOnlyModeNeverPreparesOrApplies() }),
+            ("permission-management-apply-no-replay-status", { try await permissions.testApplyFailureNeverReplaysAndStatusUsesSameOperation() }),
+            ("permission-management-error-redaction", { try await permissions.testServerFailuresNeverDisplayBodiesOrSecrets() }),
+            ("permission-management-read-cancellation", { try await permissions.testCancellationStaysReadOnlyAndDoesNotRetry() }),
+            ("permission-management-response-budget", { try await permissions.testResponseBudgetIsEnforced() }),
+            ("permission-management-pending-reopen-isolation", { try await permissions.testPendingReceiptReopensAndRejectsOverwriteOrWrongRemoval() }),
+            ("permission-management-pending-corrupt-symlink", { try await permissions.testPendingCorruptAndSymlinkRecordsNeverBecomeMissing() }),
             ("conflict-resolution-mine-backups-preserve", { try await conflicts.testMineResolutionIsReviewedLocalAndPreservesBackupsAndOtherFiles() }),
             ("conflict-resolution-theirs-pinned-version", { try await conflicts.testTheirsUsesPinnedConflictVersionEvenWhenHeadAdvances() }),
             ("conflict-resolution-manual-markers-eols", { try await conflicts.testManualMergeRejectsMarkersAndWritesExplicitLineEndings() }),

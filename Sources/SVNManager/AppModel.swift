@@ -131,6 +131,7 @@ final class AppModel: ObservableObject {
     @Published var operationProgress: OperationProgressModel?
     @Published var historySession: HistorySession?
     @Published var incomingSession: IncomingSession?
+    @Published var permissionTarget: RepositoryPermissionTarget?
     @Published var diffReloading = false
     @Published var diffError: String?
     @Published var diffRevisionChoice = "base"

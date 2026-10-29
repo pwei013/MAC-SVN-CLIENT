@@ -72,6 +72,9 @@ struct WorkingCopyToolbar: View {
         HStack(spacing: 8) {
             Button { model.openWorkingHistory() } label: { Label("提交历史", systemImage: "clock") }
             Menu {
+                Button("仓库权限…") {
+                    if let url = model.workingInfo?.url { model.permissionTarget = .init(url: url) }
+                }.disabled(model.workingInfo == nil)
                 Button("目录忽略属性…") { model.editDirectoryIgnores() }
                 Divider()
                 Button("SVN 设置…") { model.showSettings = true }

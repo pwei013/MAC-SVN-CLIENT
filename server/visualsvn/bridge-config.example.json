@@ -1,0 +1,15 @@
+{
+  "listenPrefix": "https://svn-admin.example.internal:8443/",
+  "tokenSha256": "REPLACE_WITH_SHA256_OF_A_SEPARATE_RANDOM_32_BYTE_OR_LONGER_TOKEN",
+  "allowedClientAddresses": ["127.0.0.1"],
+  "dataDirectory": "C:\\Tools\\SVNManager\\private-state",
+  "enableWrites": false,
+  "repositories": [
+    {
+      "name": "REPLACE_WITH_VISUALSVN_REPOSITORY_NAME",
+      "uuid": "REPLACE_WITH_ACTUAL_REPOSITORY_UUID",
+      "url": "http://svn.example.internal/REPLACE_WITH_ACTUAL_REPOSITORY_ROOT",
+      "paths": ["/REPLACE_WITH_ALLOWED_PROJECT_PATH"]
+    }
+  ]
+}

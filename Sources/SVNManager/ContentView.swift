@@ -32,6 +32,7 @@ struct ContentView: View {
         }
         .sheet(item: $model.historySession) { session in HistoryView(session: session, appModel: model) }
         .sheet(item: $model.incomingSession) { session in IncomingUpdatesView(session: session, appModel: model) }
+        .sheet(item: $model.permissionTarget) { target in RepositoryPermissionsView(target: target) }
         .sheet(isPresented: $model.showCommit, onDismiss: model.commitReviewDidDismiss) {
             commitReview.onAppear(perform: model.commitReviewDidAppear)
         }
@@ -156,6 +157,8 @@ struct ContentView: View {
                     Image(systemName: "link").foregroundStyle(.secondary)
                     Text(SVNLocation.display(model.currentURL)).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                     Spacer()
+                    Button { model.permissionTarget = .init(url: model.currentURL) } label: { Image(systemName: "person.badge.key.fill") }
+                        .help("管理当前路径的仓库权限").accessibilityLabel("仓库权限")
                     Button { model.browse(model.currentURL, forceReload: true) } label: { Image(systemName: "arrow.clockwise") }.help("刷新目录")
                 }.padding(12).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal, 24)
                     .disabled(model.busy)

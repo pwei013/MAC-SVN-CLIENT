@@ -1,4 +1,4 @@
-# VisualSVN 权限管理接入前检查
+# VisualSVN 4.0.1 权限管理桥接
 
 目标环境已确认：VisualSVN Server Manager 4.0.1，Subversion 本地用户认证。计划采用 Mac 客户端加内网 HTTPS 管理接口，服务器端由管理员人工配置。
 
@@ -10,7 +10,11 @@ VisualSVN 的官方版本记录明确说明：4.2 才为权限管理 PowerShell 
 - [官方版本记录：4.2.0 的 PowerShell enhancements](https://www.visualsvn.com/server/changes/)
 - [官方 PowerShell 命令说明](https://www.visualsvn.com/support/topic/00088/)
 
-旧版本存在 WMI 管理接口，但其类和方法不能根据其他版本的网上示例推断。下一步先读取本机实际接口元数据，再决定 4.0.1 兼容适配，或在用户另行决定并确认 Windows 兼容性后采用升级方案。目前尚未实现或部署权限管理 HTTPS 服务，也未更改任何真实仓库授权。
+用户提供的报告已确认 VisualSVN 4.0.1、Windows PowerShell 4.0、Windows 内核 6.3.9600；45 个 WMI 类读取完整，`diagnostics` 为空。真实接口声明包含 `VisualSVN_Repository.GetSecurity / SetSecurity`、本地用户、组及权限条目。
+
+已按实际声明实现内网 HTTPS 桥接源码。**尚未在 Windows 服务器部署或执行，未更改真实仓库权限；默认禁写。** 元数据不代表读写行为验收。管理员配置、只读比对和隔离库验收见 [人工接入与验收说明](MANUAL_SETUP.md)。第一版管理已有用户/组的一条规则，不创建账号、不修改密码或组成员，不计算最终有效访问权限。
+
+新增文件：`VisualSvnBridge.psm1`、`Start-VisualSvnBridge.ps1`、`bridge-config.example.json`、`Test-VisualSvnBridge.ps1`。本机完成语法解析和 47 项实际 PowerShell 7.6.6 离线逻辑检查，未启动监听、查询 WMI 或写入权限。它们不等于 Windows PowerShell 4.0 / VisualSVN 4.0.1 实机验证。
 
 ## 在 Windows 服务器上执行只读检查
 
